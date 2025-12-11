@@ -12,8 +12,8 @@ import androidx.activity.enableEdgeToEdge
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.activity.result.contract.ActivityResultContracts.RequestPermission
 import androidx.compose.foundation.Image
-import androidx.compose.foundation.background
 import androidx.compose.foundation.border
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -26,6 +26,9 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
+import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.items
+import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.Card
@@ -39,8 +42,10 @@ import androidx.compose.material3.Text
 import androidx.compose.material3.Surface
 import androidx.compose.material3.TopAppBarDefaults
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.mutableStateListOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.MutableState
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
@@ -48,6 +53,7 @@ import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.tooling.preview.Preview
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
@@ -62,6 +68,15 @@ import java.io.OutputStreamWriter
 import java.net.HttpURLConnection
 import java.net.URL
 import kotlin.concurrent.thread
+import org.json.JSONArray
+import androidx.compose.material3.NavigationBar
+import androidx.compose.material3.NavigationBarItem
+import androidx.compose.material3.NavigationBarItemDefaults
+import androidx.compose.material3.Icon
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.DateRange
+import androidx.compose.material.icons.filled.Edit
+import androidx.compose.runtime.LaunchedEffect
 
 // Enhanced color palette for modern logistics branding
 object DeliveryColors {
@@ -71,8 +86,19 @@ object DeliveryColors {
     val TextPrimary = Color(0xFF1A2847) // Dark text
     val TextSecondary = Color(0xFF687483) // Muted text
     val BorderLight = Color(0xFFE5E9F0) // Light border
-    val SuccessGreen = Color(0xFF10B981) // Success state
 }
+
+// Data model for history items
+data class DeliveryItem(
+    val item: String,
+    val serialNumber: String,
+    val sim: String,
+    val merchant: String,
+    val shop: String,
+    val receiver: String,
+    val deliveryAgent: String,
+    val code: String
+)
 
 class MainActivity : ComponentActivity() {
     @OptIn(ExperimentalMaterial3Api::class)
@@ -81,32 +107,49 @@ class MainActivity : ComponentActivity() {
         enableEdgeToEdge()
         setContent {
             DeliveryTheme {
-                Scaffold(
-                    modifier = Modifier.fillMaxSize(),
-                    topBar = {
-                        // Upgraded top bar with dark navy background and better styling
-                        CenterAlignedTopAppBar(
-                            title = {
-                                Column(
-                                    horizontalAlignment = Alignment.CenterHorizontally,
-                                    modifier = Modifier.fillMaxWidth()
-                                ) {
-                                    Text(
-                                        "Bon de Livraison",
-                                        fontWeight = FontWeight.Bold,
-                                        fontSize = 20.sp,
-                                        color = Color.White
-                                    )
-                                }
-                            },
-                            colors = TopAppBarDefaults.centerAlignedTopAppBarColors(
-                                containerColor = DeliveryColors.PrimaryDark
-                            ),
-                            modifier = Modifier.height(72.dp)
+                MainScreen()
+            }
+        }
+    }
+
+    // Fetch history from provided API and return parsed list via callback
+    fun fetchHistory(callback: (List<DeliveryItem>) -> Unit) {
+        val endpoint = "https://deliveries.devi7.in/api/rest/v1/deliveries/history"
+        thread {
+            try {
+                val url = URL(endpoint)
+                val conn = (url.openConnection() as HttpURLConnection).apply {
+                    requestMethod = "GET"
+                    connectTimeout = 15000
+                    readTimeout = 15000
+                }
+
+                val input = conn.inputStream.bufferedReader().use { it.readText() }
+                conn.disconnect()
+
+                val arr = JSONArray(input)
+                val list = mutableListOf<DeliveryItem>()
+                for (i in 0 until arr.length()) {
+                    val obj = arr.getJSONObject(i)
+                    list.add(
+                        DeliveryItem(
+                            item = obj.optString("item"),
+                            serialNumber = obj.optString("serialNumber"),
+                            sim = obj.optString("sim"),
+                            merchant = obj.optString("merchant"),
+                            shop = obj.optString("shop"),
+                            receiver = obj.optString("receiver"),
+                            deliveryAgent = obj.optString("deliveryAgent"),
+                            code = obj.optString("code")
                         )
-                    }
-                ) { innerPadding ->
-                    FormScreen(modifier = Modifier.padding(innerPadding))
+                    )
+                }
+
+                runOnUiThread { callback(list) }
+            } catch (e: Exception) {
+                runOnUiThread {
+                    Toast.makeText(this, "Erreur fetch historique: ${e.message}", Toast.LENGTH_LONG).show()
+                    callback(emptyList())
                 }
             }
         }
@@ -175,10 +218,10 @@ class MainActivity : ComponentActivity() {
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-fun FormScreen(modifier: Modifier = Modifier) {
+fun MainScreen() {
     val context = LocalContext.current
 
-    // form fields
+    // Lifted form state so both Form and History screens can access/update it
     val objet = remember { mutableStateOf("") }
     val serial = remember { mutableStateOf("") }
     val sim = remember { mutableStateOf("") }
@@ -186,9 +229,98 @@ fun FormScreen(modifier: Modifier = Modifier) {
     val magasin = remember { mutableStateOf("") }
     val responsable = remember { mutableStateOf("") }
     val livreur = remember { mutableStateOf("") }
-
     val imageBitmap = remember { mutableStateOf<Bitmap?>(null) }
     val imageBase64 = remember { mutableStateOf<String?>(null) }
+
+    val selected = remember { mutableStateOf<Screen>(Screen.Form) }
+
+    Scaffold(
+        topBar = {
+            CenterAlignedTopAppBar(
+                title = { Text(selected.value.title, fontWeight = FontWeight.Bold, color = Color.White) },
+                colors = TopAppBarDefaults.centerAlignedTopAppBarColors(containerColor = DeliveryColors.PrimaryDark),
+                modifier = Modifier.height(72.dp)
+            )
+        },
+        bottomBar = {
+            NavigationBar(containerColor = Color.White) {
+                NavigationBarItem(
+                    icon = { Icon(Icons.Filled.Edit, contentDescription = "Form") },
+                    label = { Text("Formulaire") },
+                    selected = selected.value is Screen.Form,
+                    onClick = { selected.value = Screen.Form },
+                    colors = NavigationBarItemDefaults.colors(
+                        selectedIconColor = DeliveryColors.PrimaryCorral,
+                        unselectedIconColor = DeliveryColors.TextSecondary,
+                        selectedTextColor = DeliveryColors.PrimaryCorral,
+                        unselectedTextColor = DeliveryColors.TextSecondary
+                    )
+                )
+                NavigationBarItem(
+                    icon = { Icon(Icons.Filled.DateRange, contentDescription = "History") },
+                    label = { Text("Historique") },
+                    selected = selected.value is Screen.History,
+                    onClick = { selected.value = Screen.History },
+                    colors = NavigationBarItemDefaults.colors(
+                        selectedIconColor = DeliveryColors.PrimaryCorral,
+                        unselectedIconColor = DeliveryColors.TextSecondary,
+                        selectedTextColor = DeliveryColors.PrimaryCorral,
+                        unselectedTextColor = DeliveryColors.TextSecondary
+                    )
+                )
+            }
+        }
+    ) { innerPadding ->
+        when (selected.value) {
+            is Screen.Form -> {
+                // pass lifted state into FormScreen
+                FormScreen(
+                    objet = objet,
+                    serial = serial,
+                    sim = sim,
+                    marchand = marchand,
+                    magasin = magasin,
+                    responsable = responsable,
+                    livreur = livreur,
+                    imageBitmap = imageBitmap,
+                    imageBase64 = imageBase64,
+                    modifier = Modifier.padding(innerPadding)
+                )
+            }
+            is Screen.History -> {
+                HistoryScreen(onPick = { item ->
+                    // fill lifted form state and navigate to form
+                    objet.value = item.item
+                    serial.value = item.serialNumber
+                    sim.value = item.sim
+                    marchand.value = item.merchant
+                    magasin.value = item.shop
+                    responsable.value = item.receiver
+                    livreur.value = item.deliveryAgent
+                    selected.value = Screen.Form
+                    Toast.makeText(context, "Élément chargé dans le formulaire", Toast.LENGTH_SHORT).show()
+                }, modifier = Modifier.padding(innerPadding))
+            }
+        }
+    }
+}
+
+// Refactored FormScreen to accept external state (lifted)
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+fun FormScreen(
+    objet: MutableState<String>,
+    serial: MutableState<String>,
+    sim: MutableState<String>,
+    marchand: MutableState<String>,
+    magasin: MutableState<String>,
+    responsable: MutableState<String>,
+    livreur: MutableState<String>,
+    imageBitmap: MutableState<Bitmap?>,
+    imageBase64: MutableState<String?>,
+    modifier: Modifier = Modifier
+) {
+    val context = LocalContext.current
 
     val cameraPermissionGranted = remember { mutableStateOf(
         ContextCompat.checkSelfPermission(context, Manifest.permission.CAMERA) == PackageManager.PERMISSION_GRANTED
@@ -203,7 +335,6 @@ fun FormScreen(modifier: Modifier = Modifier) {
         }
     }
 
-    // Launcher for taking picture
     val launcher = rememberLauncherForActivityResult(
         contract = ActivityResultContracts.TakePicturePreview()
     ) { bitmap: Bitmap? ->
@@ -220,10 +351,10 @@ fun FormScreen(modifier: Modifier = Modifier) {
         }
     }
 
-    // Updated surface background to match new color scheme
+    // UI is mostly unchanged, but using passed-in states
     Surface(
         modifier = modifier.fillMaxSize(),
-        color = DeliveryColors.SurfaceLight
+        color = Color.Transparent
     ) {
         Column(
             modifier = Modifier
@@ -231,7 +362,6 @@ fun FormScreen(modifier: Modifier = Modifier) {
                 .verticalScroll(rememberScrollState()),
         ) {
             // Section: Détails de livraison
-            // Enhanced card styling with shadow and better spacing
             Card(
                 shape = RoundedCornerShape(16.dp),
                 modifier = Modifier.fillMaxWidth(),
@@ -247,7 +377,8 @@ fun FormScreen(modifier: Modifier = Modifier) {
                         fontSize = 16.sp,
                         color = DeliveryColors.TextPrimary
                     )
-                    Spacer(modifier = Modifier.height(16.dp))
+
+                    Spacer(modifier = Modifier.height(8.dp))
 
                     // Enhanced form fields with improved styling
                     StyledTextField(
@@ -329,19 +460,22 @@ fun FormScreen(modifier: Modifier = Modifier) {
                         color = DeliveryColors.TextPrimary
                     )
                     Spacer(modifier = Modifier.height(10.dp))
+
+                    // Instruction text: allow wrapping and full width
                     Text(
                         text = "Prenez une photo de la signature ou de la preuve de livraison.",
                         color = DeliveryColors.TextSecondary,
                         fontSize = 13.sp,
                         lineHeight = 18.sp,
                         modifier = Modifier.fillMaxWidth(),
-                        maxLines = 3
+                        maxLines = 4,
+                        overflow = TextOverflow.Clip
                     )
 
                     Spacer(modifier = Modifier.height(14.dp))
 
+                    // Buttons row
                     Row(horizontalArrangement = Arrangement.spacedBy(12.dp), modifier = Modifier.fillMaxWidth()) {
-                        // Updated buttons with coral accent and improved styling
                         StyledButton(
                             onClick = {
                                 if (cameraPermissionGranted.value) {
@@ -350,7 +484,7 @@ fun FormScreen(modifier: Modifier = Modifier) {
                                     permissionLauncher.launch(Manifest.permission.CAMERA)
                                 }
                             },
-                            text = "📷 Photo",
+                            text = "📷 Prendre une photo",
                             modifier = Modifier.weight(1f),
                             isPrimary = true
                         )
@@ -367,7 +501,7 @@ fun FormScreen(modifier: Modifier = Modifier) {
 
                     Spacer(modifier = Modifier.height(16.dp))
 
-                    // Enhanced image preview styling
+                    // Enhanced image preview styling; make placeholder clickable to open camera
                     if (imageBitmap.value != null) {
                         Card(
                             shape = RoundedCornerShape(12.dp),
@@ -391,21 +525,42 @@ fun FormScreen(modifier: Modifier = Modifier) {
                             shape = RoundedCornerShape(12.dp),
                             modifier = Modifier
                                 .fillMaxWidth()
-                                .height(140.dp),
+                                .height(160.dp),
                             colors = CardDefaults.cardColors(containerColor = DeliveryColors.SurfaceLight)
                         ) {
-                            Box(contentAlignment = Alignment.Center) {
+                            Box(
+                                contentAlignment = Alignment.Center,
+                                modifier = Modifier
+                                    .fillMaxSize()
+                                    .clickable {
+                                        // also open camera when tapping placeholder
+                                        if (cameraPermissionGranted.value) {
+                                            launcher.launch(null)
+                                        } else {
+                                            permissionLauncher.launch(Manifest.permission.CAMERA)
+                                        }
+                                    }
+                                    .padding(12.dp)
+                            ) {
                                 Column(
                                     horizontalAlignment = Alignment.CenterHorizontally,
                                     verticalArrangement = Arrangement.Center,
                                     modifier = Modifier.fillMaxSize()
                                 ) {
-                                    Text(text = "📭", fontSize = 32.sp)
+                                    Text(text = "📷", fontSize = 32.sp)
                                     Spacer(modifier = Modifier.height(8.dp))
                                     Text(
-                                        text = "Aucune photo",
+                                        text = "📷 Prendre une photo",
                                         color = DeliveryColors.TextSecondary,
-                                        fontSize = 13.sp
+                                        fontSize = 14.sp,
+                                        maxLines = 2,
+                                        overflow = TextOverflow.Ellipsis
+                                    )
+                                    Spacer(modifier = Modifier.height(6.dp))
+                                    Text(
+                                        text = "ou touchez ici pour ouvrir la caméra",
+                                        color = DeliveryColors.TextSecondary,
+                                        fontSize = 12.sp
                                     )
                                 }
                             }
@@ -464,6 +619,51 @@ fun FormScreen(modifier: Modifier = Modifier) {
     }
 }
 
+// New HistoryScreen composable shows list full-screen and allows picking an item
+@Composable
+fun HistoryScreen(onPick: (DeliveryItem) -> Unit, modifier: Modifier = Modifier) {
+    val context = LocalContext.current
+    val items = remember { mutableStateListOf<DeliveryItem>() }
+
+    // load once when this composable enters composition
+    LaunchedEffect(Unit) {
+        val activity = context as? MainActivity
+        activity?.fetchHistory { list ->
+            items.clear()
+            items.addAll(list)
+        } ?: run {
+            Toast.makeText(context, "Impossible de charger historique : activité introuvable", Toast.LENGTH_SHORT).show()
+        }
+    }
+
+    Column(modifier = modifier.padding(16.dp)) {
+        Spacer(modifier = Modifier.height(6.dp))
+
+        LazyColumn {
+            items(items) { it ->
+                Card(modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(vertical = 6.dp)
+                    .clickable { onPick(it) },
+                    elevation = CardDefaults.cardElevation(defaultElevation = 1.dp)
+                ) {
+                    Column(modifier = Modifier.padding(12.dp)) {
+                        Text(text = it.item, fontWeight = FontWeight.SemiBold)
+                        Text(text = "N° série: ${it.serialNumber}", fontSize = 12.sp, color = DeliveryColors.TextSecondary)
+                        Text(text = "Magasin: ${it.shop}", fontSize = 12.sp, color = DeliveryColors.TextSecondary)
+                    }
+                }
+            }
+        }
+    }
+}
+
+// New sealed class to represent the two screens in the app
+sealed class Screen(val title: String) {
+    object Form : Screen("Bon de Livraison")
+    object History : Screen("Historique")
+}
+
 // New reusable styled text field component for consistency
 @Composable
 fun StyledTextField(
@@ -492,7 +692,7 @@ fun StyledTextField(
     )
 }
 
-// New reusable styled button component for consistency
+// Updated StyledButton: don't force Text to fill width so emoji/text remain visible and can wrap
 @Composable
 fun StyledButton(
     onClick: () -> Unit,
@@ -503,21 +703,23 @@ fun StyledButton(
     Button(
         onClick = onClick,
         // use heightIn to avoid forcing exact height which can conflict with weight
-        modifier = modifier.heightIn(min = 48.dp),
+        modifier = modifier.heightIn(min = 52.dp),
         colors = ButtonDefaults.buttonColors(
             containerColor = if (isPrimary) DeliveryColors.PrimaryCorral else DeliveryColors.BorderLight,
             contentColor = if (isPrimary) Color.White else DeliveryColors.TextPrimary
         ),
         shape = RoundedCornerShape(10.dp),
-        contentPadding = androidx.compose.foundation.layout.PaddingValues(horizontal = 16.dp, vertical = 10.dp)
+        contentPadding = androidx.compose.foundation.layout.PaddingValues(horizontal = 12.dp, vertical = 10.dp)
     ) {
         Text(
             text,
             fontWeight = if (isPrimary) FontWeight.SemiBold else FontWeight.Medium,
             fontSize = 14.sp,
-            maxLines = 1,
-            // ensure long text or emojis don't overflow vertically
-            modifier = Modifier.fillMaxWidth(),
+            maxLines = 2,
+            overflow = TextOverflow.Ellipsis,
+            softWrap = true,
+            // do not force fillMaxWidth here to avoid hiding emoji
+            modifier = Modifier,
             textAlign = TextAlign.Center
         )
     }
@@ -527,6 +729,16 @@ fun StyledButton(
 @Composable
 fun FormScreenPreview() {
     DeliveryTheme {
-        FormScreen()
+        FormScreen(
+            objet = mutableStateOf("Colis urgent"),
+            serial = mutableStateOf("SN123456"),
+            sim = mutableStateOf("SIM987654321"),
+            marchand = mutableStateOf("Marchand Test"),
+            magasin = mutableStateOf("Magasin Central"),
+            responsable = mutableStateOf("Jean Dupont"),
+            livreur = mutableStateOf("Pierre Martin"),
+            imageBitmap = mutableStateOf(null),
+            imageBase64 = mutableStateOf(null)
+        )
     }
 }
