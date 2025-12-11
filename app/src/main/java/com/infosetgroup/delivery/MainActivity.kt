@@ -28,7 +28,6 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
-import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.Card
@@ -77,6 +76,7 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.DateRange
 import androidx.compose.material.icons.filled.Edit
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.material3.CircularProgressIndicator
 
 // Enhanced color palette for modern logistics branding
 object DeliveryColors {
@@ -624,6 +624,8 @@ fun FormScreen(
 fun HistoryScreen(onPick: (DeliveryItem) -> Unit, modifier: Modifier = Modifier) {
     val context = LocalContext.current
     val items = remember { mutableStateListOf<DeliveryItem>() }
+    // Loading state shown while fetchHistory is in progress
+    val isLoading = remember { mutableStateOf(true) }
 
     // load once when this composable enters composition
     LaunchedEffect(Unit) {
@@ -631,13 +633,36 @@ fun HistoryScreen(onPick: (DeliveryItem) -> Unit, modifier: Modifier = Modifier)
         activity?.fetchHistory { list ->
             items.clear()
             items.addAll(list)
+            isLoading.value = false
         } ?: run {
             Toast.makeText(context, "Impossible de charger historique : activité introuvable", Toast.LENGTH_SHORT).show()
+            isLoading.value = false
         }
     }
 
     Column(modifier = modifier.padding(16.dp)) {
         Spacer(modifier = Modifier.height(6.dp))
+
+        // Show loader while fetching
+        if (isLoading.value) {
+            Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+                CircularProgressIndicator(color = DeliveryColors.PrimaryCorral)
+            }
+            return@Column
+        }
+
+        // Show empty state if no items
+        if (items.isEmpty()) {
+            Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+                Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                    Text(text = "Aucun historique disponible", color = DeliveryColors.TextSecondary)
+                    Spacer(modifier = Modifier.height(8.dp))
+                    // Optional: small guidance
+                    Text(text = "Essayez de rafraîchir plus tard.", color = DeliveryColors.TextSecondary, fontSize = 12.sp)
+                }
+            }
+            return@Column
+        }
 
         LazyColumn {
             items(items) { it ->
@@ -700,16 +725,22 @@ fun StyledButton(
     modifier: Modifier = Modifier,
     isPrimary: Boolean = true
 ) {
+    // Precompute objects with remember to avoid creating stateful objects during composition
+    val btnModifier = remember(modifier) { modifier.heightIn(min = 52.dp) }
+    // ButtonDefaults.buttonColors is itself @Composable, call it directly
+    val btnColors = ButtonDefaults.buttonColors(
+        containerColor = if (isPrimary) DeliveryColors.PrimaryCorral else DeliveryColors.BorderLight,
+        contentColor = if (isPrimary) Color.White else DeliveryColors.TextPrimary
+    )
+    val btnShape = remember { RoundedCornerShape(10.dp) }
+    val btnPadding = remember { androidx.compose.foundation.layout.PaddingValues(horizontal = 12.dp, vertical = 10.dp) }
+
     Button(
         onClick = onClick,
-        // use heightIn to avoid forcing exact height which can conflict with weight
-        modifier = modifier.heightIn(min = 52.dp),
-        colors = ButtonDefaults.buttonColors(
-            containerColor = if (isPrimary) DeliveryColors.PrimaryCorral else DeliveryColors.BorderLight,
-            contentColor = if (isPrimary) Color.White else DeliveryColors.TextPrimary
-        ),
-        shape = RoundedCornerShape(10.dp),
-        contentPadding = androidx.compose.foundation.layout.PaddingValues(horizontal = 12.dp, vertical = 10.dp)
+        modifier = btnModifier,
+        colors = btnColors,
+        shape = btnShape,
+        contentPadding = btnPadding
     ) {
         Text(
             text,
@@ -730,15 +761,15 @@ fun StyledButton(
 fun FormScreenPreview() {
     DeliveryTheme {
         FormScreen(
-            objet = mutableStateOf("Colis urgent"),
-            serial = mutableStateOf("SN123456"),
-            sim = mutableStateOf("SIM987654321"),
-            marchand = mutableStateOf("Marchand Test"),
-            magasin = mutableStateOf("Magasin Central"),
-            responsable = mutableStateOf("Jean Dupont"),
-            livreur = mutableStateOf("Pierre Martin"),
-            imageBitmap = mutableStateOf(null),
-            imageBase64 = mutableStateOf(null)
+            objet = remember { mutableStateOf("Colis urgent") },
+            serial = remember { mutableStateOf("SN123456") },
+            sim = remember { mutableStateOf("SIM987654321") },
+            marchand = remember { mutableStateOf("Marchand Test") },
+            magasin = remember { mutableStateOf("Magasin Central") },
+            responsable = remember { mutableStateOf("Jean Dupont") },
+            livreur = remember { mutableStateOf("Pierre Martin") },
+            imageBitmap = remember { mutableStateOf(null) },
+            imageBase64 = remember { mutableStateOf(null) }
         )
     }
 }
