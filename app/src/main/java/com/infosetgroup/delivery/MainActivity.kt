@@ -3,7 +3,6 @@ package com.infosetgroup.delivery
 import android.Manifest
 import android.graphics.Bitmap
 import android.os.Bundle
-import android.util.Base64
 import android.widget.Toast
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
@@ -28,8 +27,6 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
-import androidx.compose.material3.Button
-import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.CenterAlignedTopAppBar
@@ -41,9 +38,12 @@ import androidx.compose.material3.Text
 import androidx.compose.material3.Surface
 import androidx.compose.material3.TopAppBarDefaults
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateListOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.MutableState
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -61,12 +61,14 @@ import android.content.pm.PackageManager
 import androidx.compose.foundation.layout.heightIn
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.layout.ContentScale
-import com.infosetgroup.delivery.ui.theme.DeliveryTheme
-import java.io.ByteArrayOutputStream
-import java.io.OutputStreamWriter
-import java.net.HttpURLConnection
-import java.net.URL
-import kotlin.concurrent.thread
+import com.infosetgroup.delivery.repository.DeliveryRepository
+import com.infosetgroup.delivery.data.DeliveryEntity
+import com.infosetgroup.delivery.ui.SyncBottomBar
+import com.infosetgroup.delivery.ui.PendingScreen
+import java.io.File
+import java.io.FileOutputStream
+import java.text.SimpleDateFormat
+import java.util.Locale
 import org.json.JSONArray
 import androidx.compose.material3.NavigationBar
 import androidx.compose.material3.NavigationBarItem
@@ -75,8 +77,15 @@ import androidx.compose.material3.Icon
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.DateRange
 import androidx.compose.material.icons.filled.Edit
-import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.material3.CircularProgressIndicator
+import androidx.compose.material3.Button
+import androidx.compose.material3.ButtonDefaults
+import androidx.compose.foundation.layout.height
+import com.infosetgroup.delivery.ui.theme.DeliveryTheme
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 
 // Enhanced color palette for modern logistics branding
 object DeliveryColors {
@@ -115,10 +124,10 @@ class MainActivity : ComponentActivity() {
     // Fetch history from provided API and return parsed list via callback
     fun fetchHistory(callback: (List<DeliveryItem>) -> Unit) {
         val endpoint = "https://deliveries.devi7.in/api/rest/v1/deliveries/history"
-        thread {
+        Thread {
             try {
-                val url = URL(endpoint)
-                val conn = (url.openConnection() as HttpURLConnection).apply {
+                val url = java.net.URL(endpoint)
+                val conn = (url.openConnection() as java.net.HttpURLConnection).apply {
                     requestMethod = "GET"
                     connectTimeout = 15000
                     readTimeout = 15000
@@ -127,7 +136,7 @@ class MainActivity : ComponentActivity() {
                 val input = conn.inputStream.bufferedReader().use { it.readText() }
                 conn.disconnect()
 
-                val arr = JSONArray(input)
+                val arr = org.json.JSONArray(input)
                 val list = mutableListOf<DeliveryItem>()
                 for (i in 0 until arr.length()) {
                     val obj = arr.getJSONObject(i)
@@ -152,67 +161,7 @@ class MainActivity : ComponentActivity() {
                     callback(emptyList())
                 }
             }
-        }
-    }
-
-    // Updated to accept all fields and build a JSON payload in French keys
-    fun sendToApi(
-        objet: String,
-        serial: String,
-        sim: String,
-        marchand: String,
-        magasin: String,
-        responsable: String,
-        livreur: String,
-        imageBase64: String?
-    ) {
-        val endpoint = "https://example.com/api/upload"
-        thread {
-            try {
-                val url = URL(endpoint)
-                val conn = (url.openConnection() as HttpURLConnection).apply {
-                    requestMethod = "POST"
-                    setRequestProperty("Content-Type", "application/json")
-                    doOutput = true
-                    connectTimeout = 15000
-                    readTimeout = 15000
-                }
-
-                val safeImage = imageBase64 ?: ""
-                val json = "{" +
-                        "\"objet\":\"${escapeJson(objet)}\"," +
-                        "\"numero_serie\":\"${escapeJson(serial)}\"," +
-                        "\"sim\":\"${escapeJson(sim)}\"," +
-                        "\"marchand\":\"${escapeJson(marchand)}\"," +
-                        "\"magasin\":\"${escapeJson(magasin)}\"," +
-                        "\"responsable\":\"${escapeJson(responsable)}\"," +
-                        "\"livreur\":\"${escapeJson(livreur)}\"," +
-                        "\"image_base64\":\"${escapeJson(safeImage)}\"" +
-                        "}"
-
-                OutputStreamWriter(conn.outputStream).use { it.write(json) }
-
-                val code = conn.responseCode
-                runOnUiThread {
-                    val msg = if (code in 200..299) "Envoyé avec succès (code=$code)" else "Échec de l'envoi (code=$code)"
-                    Toast.makeText(this, msg, Toast.LENGTH_SHORT).show()
-                }
-                conn.disconnect()
-            } catch (e: Exception) {
-                runOnUiThread {
-                    Toast.makeText(this, "Erreur réseau: ${e.message}", Toast.LENGTH_LONG).show()
-                }
-            }
-        }
-    }
-
-    private fun escapeJson(s: String): String {
-        return s
-            .replace("\\", "\\\\")
-            .replace("\"", "\\\"")
-            .replace("\n", "\\n")
-            .replace("\r", "\\r")
-            .replace("\t", "\\t")
+        }.start()
     }
 }
 
@@ -230,9 +179,16 @@ fun MainScreen() {
     val responsable = remember { mutableStateOf("") }
     val livreur = remember { mutableStateOf("") }
     val imageBitmap = remember { mutableStateOf<Bitmap?>(null) }
-    val imageBase64 = remember { mutableStateOf<String?>(null) }
+    val imagePath = remember { mutableStateOf<String?>(null) }
 
     val selected = remember { mutableStateOf<Screen>(Screen.Form) }
+
+    // repository + pending state
+    val repo = DeliveryRepository.getInstance(context)
+    val pendingCountFlow = repo.observePendingCount()
+    val pendingCount by pendingCountFlow.collectAsState(initial = 0)
+    val syncing = remember { mutableStateOf(false) }
+    val showPendingScreen = remember { mutableStateOf(false) }
 
     Scaffold(
         topBar = {
@@ -243,34 +199,57 @@ fun MainScreen() {
             )
         },
         bottomBar = {
-            NavigationBar(containerColor = Color.White) {
-                NavigationBarItem(
-                    icon = { Icon(Icons.Filled.Edit, contentDescription = "Form") },
-                    label = { Text("Formulaire") },
-                    selected = selected.value is Screen.Form,
-                    onClick = { selected.value = Screen.Form },
-                    colors = NavigationBarItemDefaults.colors(
-                        selectedIconColor = DeliveryColors.PrimaryCorral,
-                        unselectedIconColor = DeliveryColors.TextSecondary,
-                        selectedTextColor = DeliveryColors.PrimaryCorral,
-                        unselectedTextColor = DeliveryColors.TextSecondary
+            Column {
+                SyncBottomBar(pendingCount = pendingCount, onOpenPending = { showPendingScreen.value = true }, onSync = {
+                    syncing.value = true
+                    CoroutineScope(Dispatchers.IO).launch {
+                        val res = repo.syncPending()
+                        syncing.value = false
+                        withContext(Dispatchers.Main) {
+                            when (res) {
+                                is com.infosetgroup.delivery.repository.SyncResult.Success -> Toast.makeText(context, "Synchronisé ${res.syncedCount}", Toast.LENGTH_SHORT).show()
+                                is com.infosetgroup.delivery.repository.SyncResult.NothingToSync -> Toast.makeText(context, "Rien à synchroniser", Toast.LENGTH_SHORT).show()
+                                is com.infosetgroup.delivery.repository.SyncResult.Failure -> Toast.makeText(context, "Échec de la synchronisation: ${res.error}", Toast.LENGTH_LONG).show()
+                            }
+                        }
+                    }
+                }, syncing = syncing.value)
+
+                NavigationBar(containerColor = Color.White) {
+                    NavigationBarItem(
+                        icon = { Icon(Icons.Filled.Edit, contentDescription = "Form") },
+                        label = { Text("Formulaire") },
+                        selected = selected.value is Screen.Form,
+                        onClick = { selected.value = Screen.Form },
+                        colors = NavigationBarItemDefaults.colors(
+                            selectedIconColor = DeliveryColors.PrimaryCorral,
+                            unselectedIconColor = DeliveryColors.TextSecondary,
+                            selectedTextColor = DeliveryColors.PrimaryCorral,
+                            unselectedTextColor = DeliveryColors.TextSecondary
+                        )
                     )
-                )
-                NavigationBarItem(
-                    icon = { Icon(Icons.Filled.DateRange, contentDescription = "History") },
-                    label = { Text("Historique") },
-                    selected = selected.value is Screen.History,
-                    onClick = { selected.value = Screen.History },
-                    colors = NavigationBarItemDefaults.colors(
-                        selectedIconColor = DeliveryColors.PrimaryCorral,
-                        unselectedIconColor = DeliveryColors.TextSecondary,
-                        selectedTextColor = DeliveryColors.PrimaryCorral,
-                        unselectedTextColor = DeliveryColors.TextSecondary
+                    NavigationBarItem(
+                        icon = { Icon(Icons.Filled.DateRange, contentDescription = "History") },
+                        label = { Text("Historique") },
+                        selected = selected.value is Screen.History,
+                        onClick = { selected.value = Screen.History },
+                        colors = NavigationBarItemDefaults.colors(
+                            selectedIconColor = DeliveryColors.PrimaryCorral,
+                            unselectedIconColor = DeliveryColors.TextSecondary,
+                            selectedTextColor = DeliveryColors.PrimaryCorral,
+                            unselectedTextColor = DeliveryColors.TextSecondary
+                        )
                     )
-                )
+                }
             }
         }
     ) { innerPadding ->
+
+        if (showPendingScreen.value) {
+            PendingScreen(onBack = { showPendingScreen.value = false }, modifier = Modifier.padding(innerPadding))
+            return@Scaffold
+        }
+
         when (selected.value) {
             is Screen.Form -> {
                 // pass lifted state into FormScreen
@@ -283,7 +262,7 @@ fun MainScreen() {
                     responsable = responsable,
                     livreur = livreur,
                     imageBitmap = imageBitmap,
-                    imageBase64 = imageBase64,
+                    imagePath = imagePath,
                     modifier = Modifier.padding(innerPadding)
                 )
             }
@@ -317,7 +296,7 @@ fun FormScreen(
     responsable: MutableState<String>,
     livreur: MutableState<String>,
     imageBitmap: MutableState<Bitmap?>,
-    imageBase64: MutableState<String?>,
+    imagePath: MutableState<String?>,
     modifier: Modifier = Modifier
 ) {
     val context = LocalContext.current
@@ -340,16 +319,27 @@ fun FormScreen(
     ) { bitmap: Bitmap? ->
         if (bitmap != null) {
             imageBitmap.value = bitmap
-            // convert to base64
-            val baos = ByteArrayOutputStream()
-            bitmap.compress(Bitmap.CompressFormat.JPEG, 80, baos)
-            val bytes = baos.toByteArray()
-            imageBase64.value = Base64.encodeToString(bytes, Base64.NO_WRAP)
-            Toast.makeText(context, "Photo prise", Toast.LENGTH_SHORT).show()
+            // save image to app files directory and store its path
+            try {
+                val dir = File(context.filesDir, "images")
+                if (!dir.exists()) dir.mkdirs()
+                val time = SimpleDateFormat("yyyyMMdd_HHmmss", Locale.US).format(System.currentTimeMillis())
+                val file = File(dir, "IMG_${time}.jpg")
+                FileOutputStream(file).use { fos ->
+                    bitmap.compress(Bitmap.CompressFormat.JPEG, 85, fos)
+                }
+                imagePath.value = file.absolutePath
+                Toast.makeText(context, "Photo prise", Toast.LENGTH_SHORT).show()
+            } catch (t: Throwable) {
+                Toast.makeText(context, "Erreur lors de l'enregistrement de la photo: ${t.message}", Toast.LENGTH_LONG).show()
+            }
         } else {
             Toast.makeText(context, "Aucune photo", Toast.LENGTH_SHORT).show()
         }
     }
+
+    // submitting state to disable the send button while the request is in flight
+    val submitting = remember { mutableStateOf(false) }
 
     // UI is mostly unchanged, but using passed-in states
     Surface(
@@ -486,16 +476,18 @@ fun FormScreen(
                             },
                             text = "📷 Prendre une photo",
                             modifier = Modifier.weight(1f),
-                            isPrimary = true
+                            isPrimary = true,
+                            enabled = true
                         )
                         StyledButton(
                             onClick = {
                                 imageBitmap.value = null
-                                imageBase64.value = null
+                                imagePath.value = null
                             },
                             text = "Effacer",
                             modifier = Modifier.weight(1f),
-                            isPrimary = false
+                            isPrimary = false,
+                            enabled = true
                         )
                     }
 
@@ -579,21 +571,35 @@ fun FormScreen(
                             Toast.makeText(context, "Veuillez renseigner l'objet", Toast.LENGTH_SHORT).show()
                             return@StyledButton
                         }
-                        val activity = context as? MainActivity
-                        activity?.sendToApi(
-                            objet.value,
-                            serial.value,
-                            sim.value,
-                            marchand.value,
-                            magasin.value,
-                            responsable.value,
-                            livreur.value,
-                            imageBase64.value
-                        ) ?: Toast.makeText(context, "Impossible d'envoyer : activité introuvable", Toast.LENGTH_SHORT).show()
+                        // build entity and submit via repository
+                        val repo = DeliveryRepository.getInstance(context)
+                        val entity = DeliveryEntity(
+                            item = objet.value,
+                            serialNumber = serial.value,
+                            sim = sim.value,
+                            merchant = marchand.value,
+                            shop = magasin.value,
+                            receiver = responsable.value,
+                            deliveryAgent = livreur.value,
+                            receiverProofPath = imagePath.value
+                        )
+                        submitting.value = true
+                        CoroutineScope(Dispatchers.IO).launch {
+                            val res = repo.submitDelivery(entity)
+                            withContext(Dispatchers.Main) {
+                                when (res) {
+                                    is com.infosetgroup.delivery.repository.SubmitResult.Sent -> Toast.makeText(context, "Envoyé", Toast.LENGTH_SHORT).show()
+                                    is com.infosetgroup.delivery.repository.SubmitResult.Queued -> Toast.makeText(context, "Sauvegardé hors ligne (id=${res.id})", Toast.LENGTH_SHORT).show()
+                                    is com.infosetgroup.delivery.repository.SubmitResult.Failure -> Toast.makeText(context, "Erreur: ${res.error}", Toast.LENGTH_LONG).show()
+                                }
+                                submitting.value = false
+                            }
+                        }
                     },
                     text = "✓ Envoyer",
                     modifier = Modifier.weight(1f),
-                    isPrimary = true
+                    isPrimary = true,
+                    enabled = true
                 )
 
                 StyledButton(
@@ -606,11 +612,12 @@ fun FormScreen(
                         responsable.value = ""
                         livreur.value = ""
                         imageBitmap.value = null
-                        imageBase64.value = null
+                        imagePath.value = null
                     },
                     text = "↻ Réinitialiser",
                     modifier = Modifier.weight(1f),
-                    isPrimary = false
+                    isPrimary = false,
+                    enabled = true
                 )
             }
 
@@ -723,7 +730,8 @@ fun StyledButton(
     onClick: () -> Unit,
     text: String,
     modifier: Modifier = Modifier,
-    isPrimary: Boolean = true
+    isPrimary: Boolean = true,
+    enabled: Boolean = true
 ) {
     // Precompute objects with remember to avoid creating stateful objects during composition
     val btnModifier = remember(modifier) { modifier.heightIn(min = 52.dp) }
@@ -740,6 +748,7 @@ fun StyledButton(
         modifier = btnModifier,
         colors = btnColors,
         shape = btnShape,
+        enabled = enabled,
         contentPadding = btnPadding
     ) {
         Text(
@@ -769,7 +778,7 @@ fun FormScreenPreview() {
             responsable = remember { mutableStateOf("Jean Dupont") },
             livreur = remember { mutableStateOf("Pierre Martin") },
             imageBitmap = remember { mutableStateOf(null) },
-            imageBase64 = remember { mutableStateOf(null) }
+            imagePath = remember { mutableStateOf(null) }
         )
     }
 }
