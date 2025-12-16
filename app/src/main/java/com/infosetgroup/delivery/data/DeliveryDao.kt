@@ -13,8 +13,13 @@ interface DeliveryDao {
     @Insert(onConflict = OnConflictStrategy.REPLACE)
     suspend fun insertPending(entity: DeliveryEntity): Long
 
+    //
     @Query("SELECT * FROM pending_deliveries ORDER BY createdAt ASC")
     fun getAllPending(): Flow<List<DeliveryEntity>>
+
+    //
+    @Query("SELECT * FROM pending_deliveries")
+    suspend fun getAllDeliveries(): List<DeliveryEntity>
 
     @Query("SELECT COUNT(*) FROM pending_deliveries")
     fun getPendingCountFlow(): Flow<Int>

@@ -16,5 +16,6 @@ data class DeliveryEntity(
     // store local file path to the saved image instead of Base64 in DB
     val receiverProofPath: String?,
     val createdAt: Long = System.currentTimeMillis(),
-    val retryCount: Int = 0
+    val retryCount: Int = 0,
+    val status: String? = "PENDING"
 )

@@ -14,6 +14,8 @@ import org.json.JSONArray
 import org.json.JSONObject
 import java.io.File
 
+
+
 sealed class SubmitResult {
     object Sent : SubmitResult()
     data class Queued(val id: Long) : SubmitResult()
@@ -30,6 +32,15 @@ class DeliveryRepository private constructor(private val context: Context) {
     private val dao = AppDatabase.getInstance(context).deliveryDao()
 
     fun observePendingCount() = dao.getPendingCountFlow()
+
+    suspend fun getAllDeliveries(): List<DeliveryEntity> {
+        return getAllDeliveries()
+    }
+
+    suspend fun syncDeliveries() {
+        val pending = dao.getAllPending().first()
+        if (pending.isEmpty()) return
+    }
 
     private suspend fun fileToBase64(path: String?): String {
         if (path.isNullOrBlank()) return ""

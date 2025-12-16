@@ -69,7 +69,6 @@ import java.io.File
 import java.io.FileOutputStream
 import java.text.SimpleDateFormat
 import java.util.Locale
-import org.json.JSONArray
 import androidx.compose.material3.NavigationBar
 import androidx.compose.material3.NavigationBarItem
 import androidx.compose.material3.NavigationBarItemDefaults
@@ -77,10 +76,11 @@ import androidx.compose.material3.Icon
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.DateRange
 import androidx.compose.material.icons.filled.Edit
-import androidx.compose.material3.CircularProgressIndicator
+import androidx.compose.material.icons.filled.Sync
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
-import androidx.compose.foundation.layout.height
+import androidx.compose.material3.CircularProgressIndicator
+import androidx.lifecycle.viewmodel.compose.viewModel
 import com.infosetgroup.delivery.ui.theme.DeliveryTheme
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -182,13 +182,13 @@ fun MainScreen() {
     val imagePath = remember { mutableStateOf<String?>(null) }
 
     val selected = remember { mutableStateOf<Screen>(Screen.Form) }
+    val currentTab = remember { mutableStateOf<MainTab>(MainTab.FormTab) }
 
     // repository + pending state
     val repo = DeliveryRepository.getInstance(context)
     val pendingCountFlow = repo.observePendingCount()
     val pendingCount by pendingCountFlow.collectAsState(initial = 0)
     val syncing = remember { mutableStateOf(false) }
-    val showPendingScreen = remember { mutableStateOf(false) }
 
     Scaffold(
         topBar = {
@@ -200,27 +200,31 @@ fun MainScreen() {
         },
         bottomBar = {
             Column {
-                SyncBottomBar(pendingCount = pendingCount, onOpenPending = { showPendingScreen.value = true }, onSync = {
-                    syncing.value = true
-                    CoroutineScope(Dispatchers.IO).launch {
-                        val res = repo.syncPending()
-                        syncing.value = false
-                        withContext(Dispatchers.Main) {
-                            when (res) {
-                                is com.infosetgroup.delivery.repository.SyncResult.Success -> Toast.makeText(context, "Synchronisé ${res.syncedCount}", Toast.LENGTH_SHORT).show()
-                                is com.infosetgroup.delivery.repository.SyncResult.NothingToSync -> Toast.makeText(context, "Rien à synchroniser", Toast.LENGTH_SHORT).show()
-                                is com.infosetgroup.delivery.repository.SyncResult.Failure -> Toast.makeText(context, "Échec de la synchronisation: ${res.error}", Toast.LENGTH_LONG).show()
-                            }
-                        }
-                    }
-                }, syncing = syncing.value)
+                SyncBottomBar(pendingCount = pendingCount, onOpenPending = {
+                    // open the Offline tab when user taps the pending count
+                    currentTab.value = MainTab.OfflineTab
+                    selected.value = Screen.Offline
+                }, onSync = {
+                     syncing.value = true
+                     CoroutineScope(Dispatchers.IO).launch {
+                         val res = repo.syncPending()
+                         syncing.value = false
+                         withContext(Dispatchers.Main) {
+                             when (res) {
+                                 is com.infosetgroup.delivery.repository.SyncResult.Success -> Toast.makeText(context, "Synchronisé ${res.syncedCount}", Toast.LENGTH_SHORT).show()
+                                 is com.infosetgroup.delivery.repository.SyncResult.NothingToSync -> Toast.makeText(context, "Rien à synchroniser", Toast.LENGTH_SHORT).show()
+                                 is com.infosetgroup.delivery.repository.SyncResult.Failure -> Toast.makeText(context, "Échec de la synchronisation: ${res.error}", Toast.LENGTH_LONG).show()
+                             }
+                         }
+                     }
+                 }, syncing = syncing.value)
 
                 NavigationBar(containerColor = Color.White) {
                     NavigationBarItem(
                         icon = { Icon(Icons.Filled.Edit, contentDescription = "Form") },
                         label = { Text("Formulaire") },
-                        selected = selected.value is Screen.Form,
-                        onClick = { selected.value = Screen.Form },
+                        selected = currentTab.value is MainTab.FormTab,
+                        onClick = { currentTab.value = MainTab.FormTab; selected.value = Screen.Form },
                         colors = NavigationBarItemDefaults.colors(
                             selectedIconColor = DeliveryColors.PrimaryCorral,
                             unselectedIconColor = DeliveryColors.TextSecondary,
@@ -231,8 +235,20 @@ fun MainScreen() {
                     NavigationBarItem(
                         icon = { Icon(Icons.Filled.DateRange, contentDescription = "History") },
                         label = { Text("Historique") },
-                        selected = selected.value is Screen.History,
-                        onClick = { selected.value = Screen.History },
+                        selected = currentTab.value is MainTab.HistoryTab,
+                        onClick = { currentTab.value = MainTab.HistoryTab; selected.value = Screen.History },
+                        colors = NavigationBarItemDefaults.colors(
+                            selectedIconColor = DeliveryColors.PrimaryCorral,
+                            unselectedIconColor = DeliveryColors.TextSecondary,
+                            selectedTextColor = DeliveryColors.PrimaryCorral,
+                            unselectedTextColor = DeliveryColors.TextSecondary
+                        )
+                    )
+                    NavigationBarItem(
+                        icon = { Icon(Icons.Filled.Sync, contentDescription = "Offline") },
+                        label = { Text("Hors-ligne") },
+                        selected = currentTab.value is MainTab.OfflineTab,
+                        onClick = { currentTab.value = MainTab.OfflineTab; selected.value = Screen.Form },
                         colors = NavigationBarItemDefaults.colors(
                             selectedIconColor = DeliveryColors.PrimaryCorral,
                             unselectedIconColor = DeliveryColors.TextSecondary,
@@ -245,11 +261,7 @@ fun MainScreen() {
         }
     ) { innerPadding ->
 
-        if (showPendingScreen.value) {
-            PendingScreen(onBack = { showPendingScreen.value = false }, modifier = Modifier.padding(innerPadding))
-            return@Scaffold
-        }
-
+        // Render the selected screen; treat Offline as a first-class tab
         when (selected.value) {
             is Screen.Form -> {
                 // pass lifted state into FormScreen
@@ -280,6 +292,13 @@ fun MainScreen() {
                     Toast.makeText(context, "Élément chargé dans le formulaire", Toast.LENGTH_SHORT).show()
                 }, modifier = Modifier.padding(innerPadding))
             }
+            is Screen.Offline -> {
+                PendingScreen(onBack = {
+                    // go back to Form tab by default
+                    currentTab.value = MainTab.FormTab
+                    selected.value = Screen.Form
+                }, modifier = Modifier.padding(innerPadding))
+            }
         }
     }
 }
@@ -300,6 +319,22 @@ fun FormScreen(
     modifier: Modifier = Modifier
 ) {
     val context = LocalContext.current
+
+    // Obtain the ViewModel for form submission and UI state
+    val deliveryViewModel: com.infosetgroup.delivery.ui.DeliveryViewModel = viewModel()
+    val isSubmitting by deliveryViewModel.isSubmitting.collectAsState()
+    val lastSubmitResult by deliveryViewModel.lastSubmitResult.collectAsState()
+
+    // Observe submit result and show feedback once it changes
+    LaunchedEffect(lastSubmitResult) {
+        lastSubmitResult?.let { res ->
+            when (res) {
+                is com.infosetgroup.delivery.repository.SubmitResult.Sent -> Toast.makeText(context, "Envoyé", Toast.LENGTH_SHORT).show()
+                is com.infosetgroup.delivery.repository.SubmitResult.Queued -> Toast.makeText(context, "Sauvegardé hors ligne (id=${res.id})", Toast.LENGTH_SHORT).show()
+                is com.infosetgroup.delivery.repository.SubmitResult.Failure -> Toast.makeText(context, "Erreur: ${res.error}", Toast.LENGTH_LONG).show()
+            }
+        }
+    }
 
     val cameraPermissionGranted = remember { mutableStateOf(
         ContextCompat.checkSelfPermission(context, Manifest.permission.CAMERA) == PackageManager.PERMISSION_GRANTED
@@ -338,8 +373,7 @@ fun FormScreen(
         }
     }
 
-    // submitting state to disable the send button while the request is in flight
-    val submitting = remember { mutableStateOf(false) }
+    // submitting state is provided by the DeliveryViewModel (bound above)
 
     // UI is mostly unchanged, but using passed-in states
     Surface(
@@ -571,8 +605,7 @@ fun FormScreen(
                             Toast.makeText(context, "Veuillez renseigner l'objet", Toast.LENGTH_SHORT).show()
                             return@StyledButton
                         }
-                        // build entity and submit via repository
-                        val repo = DeliveryRepository.getInstance(context)
+                        // build entity and submit via ViewModel
                         val entity = DeliveryEntity(
                             item = objet.value,
                             serialNumber = serial.value,
@@ -583,23 +616,12 @@ fun FormScreen(
                             deliveryAgent = livreur.value,
                             receiverProofPath = imagePath.value
                         )
-                        submitting.value = true
-                        CoroutineScope(Dispatchers.IO).launch {
-                            val res = repo.submitDelivery(entity)
-                            withContext(Dispatchers.Main) {
-                                when (res) {
-                                    is com.infosetgroup.delivery.repository.SubmitResult.Sent -> Toast.makeText(context, "Envoyé", Toast.LENGTH_SHORT).show()
-                                    is com.infosetgroup.delivery.repository.SubmitResult.Queued -> Toast.makeText(context, "Sauvegardé hors ligne (id=${res.id})", Toast.LENGTH_SHORT).show()
-                                    is com.infosetgroup.delivery.repository.SubmitResult.Failure -> Toast.makeText(context, "Erreur: ${res.error}", Toast.LENGTH_LONG).show()
-                                }
-                                submitting.value = false
-                            }
-                        }
+                        deliveryViewModel.submitDelivery(entity)
                     },
                     text = "✓ Envoyer",
                     modifier = Modifier.weight(1f),
                     isPrimary = true,
-                    enabled = true
+                    enabled = !isSubmitting
                 )
 
                 StyledButton(
@@ -672,7 +694,7 @@ fun HistoryScreen(onPick: (DeliveryItem) -> Unit, modifier: Modifier = Modifier)
         }
 
         LazyColumn {
-            items(items) { it ->
+            items(items) {
                 Card(modifier = Modifier
                     .fillMaxWidth()
                     .padding(vertical = 6.dp)
@@ -694,6 +716,14 @@ fun HistoryScreen(onPick: (DeliveryItem) -> Unit, modifier: Modifier = Modifier)
 sealed class Screen(val title: String) {
     object Form : Screen("Bon de Livraison")
     object History : Screen("Historique")
+    object Offline : Screen("Hors-ligne")
+}
+
+// Top-level MainTab wrappers for the bottom navigation selection
+sealed class MainTab(val screen: Screen) {
+    object FormTab : MainTab(Screen.Form)
+    object HistoryTab : MainTab(Screen.History)
+    object OfflineTab : MainTab(Screen.Offline)
 }
 
 // New reusable styled text field component for consistency
