@@ -4,8 +4,9 @@ import android.content.Context
 import androidx.room.Database
 import androidx.room.Room
 import androidx.room.RoomDatabase
+import com.infosetgroup.delivery.data.DatabaseMigrations
 
-@Database(entities = [DeliveryEntity::class], version = 1, exportSchema = false)
+@Database(entities = [DeliveryEntity::class], version = 2, exportSchema = false)
 abstract class AppDatabase : RoomDatabase() {
     abstract fun deliveryDao(): DeliveryDao
 
@@ -19,11 +20,11 @@ abstract class AppDatabase : RoomDatabase() {
                     context.applicationContext,
                     AppDatabase::class.java,
                     "delivery_app.db"
-                ).build()
+                ).addMigrations(DatabaseMigrations.MIGRATION_1_2)
+                 .build()
                 INSTANCE = instance
                 instance
             }
         }
     }
 }
-
