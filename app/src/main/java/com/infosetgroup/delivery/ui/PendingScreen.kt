@@ -334,7 +334,7 @@ fun DeliveryDetailsSheet(delivery: DeliveryEntity, onClose: () -> Unit) {
         Row(verticalAlignment = Alignment.CenterVertically) {
             Text(text = "Delivery details", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold)
             Spacer(modifier = Modifier.weight(1f))
-            IconButton(onClick = onClose) { Icon(Icons.Filled.Close, contentDescription = "Close") }
+            IconButton(onClick = onClose) { Icon(Icons.Filled.Close, contentDescription = "Close", tint = MaterialTheme.colorScheme.onSurface) }
         }
         Spacer(modifier = Modifier.height(12.dp))
         Text(text = "Item: ${delivery.item}", style = MaterialTheme.typography.bodyLarge)
