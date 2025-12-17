@@ -22,15 +22,19 @@ import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
-import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.KeyboardArrowRight
 import androidx.compose.ui.graphics.graphicsLayer
-import androidx.compose.material.icons.rounded.Assignment
 import androidx.compose.material.icons.rounded.History
 import androidx.compose.material.icons.rounded.CloudOff
 import androidx.compose.foundation.shape.CircleShape
+import androidx.compose.foundation.text.KeyboardOptions
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.filled.ArrowBack
+import androidx.compose.material.icons.automirrored.filled.Assignment
+import androidx.compose.material.icons.automirrored.rounded.Assignment
 import androidx.compose.material.icons.filled.*
 import androidx.compose.material3.*
+import androidx.compose.material3.HorizontalDivider
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -41,6 +45,7 @@ import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.input.TextFieldValue
 import androidx.compose.ui.tooling.preview.Preview
 import androidx.compose.ui.unit.dp
@@ -69,7 +74,6 @@ object DeliveryColors {
     val PrimaryLight = Color(0xFF334155)    // Slate 700
     val Accent = Color(0xFFF97316)          // Orange 500 (Action Buttons)
     val Background = Color(0xFFF1F5F9)      // Slate 100 (App Background)
-    val CardBg = Color(0xFFFFFFFF)
     val TextPrimary = Color(0xFF0F172A)
     val TextSecondary = Color(0xFF64748B)
     val InputBg = Color(0xFFF8FAFC)
@@ -199,15 +203,10 @@ class MainActivity : ComponentActivity() {
                     )
                 }
                 runOnUiThread { callback(list) }
-            } catch (e: Exception) {
+            } catch (_: Exception) {
                 runOnUiThread {
                     runOnUiThread {
-                        val userFriendlyMessage = when {
-                            e is java.net.UnknownHostException -> "Vérifiez votre connexion internet."
-                            e is java.net.SocketTimeoutException -> "Le serveur met trop de temps à répondre."
-                            else -> "Impossible de récupérer l'historique."
-                        }
-                        // Adding an emoji makes it feel less like a system crash and more like a helpful note
+                        val userFriendlyMessage = "Impossible de récupérer l'historique."
                         Toast.makeText(this, "📴 $userFriendlyMessage", Toast.LENGTH_LONG).show()
                         callback(emptyList())
                     }
@@ -234,9 +233,10 @@ fun MainScreen() {
     val livreur = remember { mutableStateOf("") }
     val imageBitmap = remember { mutableStateOf<Bitmap?>(null) }
     val imagePath = remember { mutableStateOf<String?>(null) }
-
     val selected = remember { mutableStateOf<Screen>(Screen.Form) }
     val currentTab = remember { mutableStateOf<MainTab>(MainTab.FormTab) }
+    // --- NEW: State for selected history item ---
+    val selectedHistoryItem = remember { mutableStateOf<DeliveryItem?>(null) }
 
     // Repository & Sync State
     val repo = DeliveryRepository.getInstance(context)
@@ -294,7 +294,7 @@ fun MainScreen() {
                 ) {
                     // Define items in a list for clean iteration
                     val navItems = listOf(
-                        Triple(MainTab.FormTab, Screen.Form, Icons.Rounded.Assignment),
+                        Triple(MainTab.FormTab, Screen.Form, Icons.AutoMirrored.Rounded.Assignment),
                         Triple(MainTab.HistoryTab, Screen.History, Icons.Rounded.History),
                         Triple(MainTab.OfflineTab, Screen.Offline, Icons.Rounded.CloudOff)
                     )
@@ -353,50 +353,44 @@ fun MainScreen() {
             }
         }
     ) { innerPadding ->
-        // Screen Content
-        when (selected.value) {
-            is Screen.Form -> {
-                FormScreen(
-                    objet = objet,
-                    serial = serial,
-                    sim = sim,
-                    marchand = marchand,
-                    magasin = magasin,
-                    responsable = responsable,
-                    livreur = livreur,
-                    imageBitmap = imageBitmap,
-                    imagePath = imagePath,
-                    modifier = Modifier.padding(innerPadding)
-                )
-            }
-            is Screen.History -> {
-                HistoryScreen(
-                    onPick = { item ->
-                        // Populate Form
-                        objet.value = item.item
-                        serial.value = item.serialNumber
-                        sim.value = item.sim
-                        marchand.value = item.merchant
-                        magasin.value = item.shop
-                        responsable.value = item.receiver
-                        livreur.value = item.deliveryAgent
-
-                        // Navigate
-                        currentTab.value = MainTab.FormTab
-                        selected.value = Screen.Form
-                        Toast.makeText(context, "Chargé depuis l'historique", Toast.LENGTH_SHORT).show()
-                    },
-                    modifier = Modifier.padding(innerPadding)
-                )
-            }
-            is Screen.Offline -> {
-                PendingScreen(
-                    onBack = {
-                        currentTab.value = MainTab.FormTab
-                        selected.value = Screen.Form
-                    },
-                    modifier = Modifier.padding(innerPadding)
-                )
+        // --- NEW: Show detail if selectedHistoryItem is not null ---
+        if (selected.value is Screen.History && selectedHistoryItem.value != null) {
+            HistoryDetailScreen(
+                item = selectedHistoryItem.value!!,
+                onBack = { selectedHistoryItem.value = null }
+            )
+        } else {
+            // Screen Content
+            when (selected.value) {
+                is Screen.Form -> {
+                    FormScreen(
+                        objet = objet,
+                        serial = serial,
+                        sim = sim,
+                        marchand = marchand,
+                        magasin = magasin,
+                        responsable = responsable,
+                        livreur = livreur,
+                        imageBitmap = imageBitmap,
+                        imagePath = imagePath,
+                        modifier = Modifier.padding(innerPadding)
+                    )
+                }
+                is Screen.History -> {
+                    HistoryScreen(
+                        onShowDetail = { selectedHistoryItem.value = it },
+                        modifier = Modifier.padding(innerPadding)
+                    )
+                }
+                is Screen.Offline -> {
+                    PendingScreen(
+                        onBack = {
+                            currentTab.value = MainTab.FormTab
+                            selected.value = Screen.Form
+                        },
+                        modifier = Modifier.padding(innerPadding)
+                    )
+                }
             }
         }
     }
@@ -405,7 +399,7 @@ fun MainScreen() {
 // --- 6. HISTORY SCREEN (Redesigned) ---
 
 @Composable
-fun HistoryScreen(onPick: (DeliveryItem) -> Unit, modifier: Modifier = Modifier) {
+fun HistoryScreen(onShowDetail: (DeliveryItem) -> Unit, modifier: Modifier = Modifier) {
     val context = LocalContext.current
     val items = remember { mutableStateListOf<DeliveryItem>() }
     val isLoading = remember { mutableStateOf(true) }
@@ -468,7 +462,7 @@ fun HistoryScreen(onPick: (DeliveryItem) -> Unit, modifier: Modifier = Modifier)
                         modifier = Modifier
                             .fillMaxWidth()
                             .padding(vertical = 6.dp)
-                            .clickable { onPick(delivery) },
+                            .clickable { onShowDetail(delivery) },
                         colors = CardDefaults.cardColors(containerColor = Color.White),
                         elevation = CardDefaults.cardElevation(2.dp),
                         shape = RoundedCornerShape(12.dp)
@@ -530,6 +524,126 @@ fun HistoryScreen(onPick: (DeliveryItem) -> Unit, modifier: Modifier = Modifier)
             }
         }
     }
+}
+
+// --- NEW: HISTORY DETAIL SCREEN ---
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+fun HistoryDetailScreen(item: DeliveryItem, onBack: () -> Unit) {
+    Surface(
+        modifier = Modifier.fillMaxSize(),
+        color = DeliveryColors.Background
+    ) {
+        Column(modifier = Modifier.fillMaxSize()) {
+            // --- Modern Header ---
+            Box(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .background(
+                        brush = androidx.compose.ui.graphics.Brush.horizontalGradient(
+                            listOf(DeliveryColors.PrimaryDark, DeliveryColors.Accent)
+                        )
+                    )
+                    .height(180.dp)
+            ) {
+                // Large Icon
+                Icon(
+                    imageVector = Icons.AutoMirrored.Filled.Assignment,
+                    contentDescription = null,
+                    tint = Color.White.copy(alpha = 0.18f),
+                    modifier = Modifier
+                        .size(120.dp)
+                        .align(Alignment.CenterEnd)
+                        .offset(x = 24.dp)
+                )
+                // Title
+                Column(
+                    modifier = Modifier
+                        .align(Alignment.CenterStart)
+                        .padding(start = 28.dp, end = 100.dp)
+                ) {
+                    Text(
+                        text = item.item,
+                        color = Color.White,
+                        fontWeight = FontWeight.Bold,
+                        fontSize = 26.sp,
+                        maxLines = 2
+                    )
+                    Spacer(modifier = Modifier.height(8.dp))
+                    Text(
+                        text = "Détail de la livraison",
+                        color = Color.White.copy(alpha = 0.8f),
+                        fontSize = 15.sp
+                    )
+                }
+                // Back Button
+                IconButton(
+                    onClick = onBack,
+                    modifier = Modifier
+                        .align(Alignment.TopStart)
+                        .padding(12.dp)
+                        .background(Color.White.copy(alpha = 0.18f), CircleShape)
+                ) {
+                    Icon(
+                        Icons.AutoMirrored.Filled.ArrowBack,
+                        contentDescription = "Retour",
+                        tint = Color.White,
+                        modifier = Modifier.size(28.dp)
+                    )
+                }
+            }
+            // --- Details List ---
+            Column(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(horizontal = 24.dp, vertical = 18.dp)
+            ) {
+                DetailRowModern(Icons.Filled.QrCode, "N° Série", item.serialNumber)
+                DetailRowModern(Icons.Filled.SimCard, "SIM", item.sim)
+                DetailRowModern(Icons.Filled.Store, "Marchand", item.merchant)
+                DetailRowModern(Icons.Filled.Store, "Magasin", item.shop)
+                DetailRowModern(Icons.Filled.Person, "Responsable", item.receiver)
+                DetailRowModern(Icons.Filled.LocalShipping, "Livreur", item.deliveryAgent)
+                DetailRowModern(Icons.Filled.VpnKey, "Code", item.code)
+            }
+        }
+    }
+}
+
+@Composable
+fun DetailRowModern(icon: ImageVector, label: String, value: String) {
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(vertical = 10.dp),
+        verticalAlignment = Alignment.CenterVertically
+    ) {
+        Box(
+            modifier = Modifier
+                .size(36.dp)
+                .background(DeliveryColors.InputBg, CircleShape),
+            contentAlignment = Alignment.Center
+        ) {
+            Icon(icon, contentDescription = null, tint = DeliveryColors.Accent, modifier = Modifier.size(20.dp))
+        }
+        Spacer(modifier = Modifier.width(16.dp))
+        Column(modifier = Modifier.weight(1f)) {
+            Text(
+                text = label,
+                color = DeliveryColors.TextSecondary,
+                fontSize = 13.sp,
+                fontWeight = FontWeight.Medium
+            )
+            Text(
+                text = value,
+                color = DeliveryColors.TextPrimary,
+                fontWeight = FontWeight.Bold,
+                fontSize = 16.sp,
+                maxLines = 2
+            )
+        }
+    }
+    HorizontalDivider(color = DeliveryColors.BorderSubtle, thickness = 1.dp)
 }
 
 // --- 7. FORM SCREEN (Redesigned) ---
@@ -652,13 +766,49 @@ fun FormScreen(
                             icon = Icons.Filled.QrCode,
                             modifier = Modifier.weight(1f)
                         )
-                        ModernTextField(
-                            value = sim.value,
-                            onValueChange = { sim.value = it },
-                            label = "SIM / ICCID",
-                            icon = Icons.Filled.SimCard,
-                            modifier = Modifier.weight(1f)
-                        )
+                        // SIM field with visible +243 prefix
+                        Column(modifier = Modifier.weight(1f)) {
+                            Text(
+                                text = "SIM / ICCID",
+                                fontSize = 12.sp,
+                                fontWeight = FontWeight.Medium,
+                                color = DeliveryColors.TextPrimary,
+                                modifier = Modifier.padding(start = 4.dp, bottom = 4.dp)
+                            )
+                            TextField(
+                                value = sim.value.removePrefix("+243"),
+                                onValueChange = { newValue ->
+                                    // Always enforce the +243 prefix
+                                    sim.value = "+243" + newValue.filter { it.isDigit() }
+                                },
+                                modifier = Modifier.fillMaxWidth(),
+                                shape = RoundedCornerShape(12.dp),
+                                leadingIcon = {
+                                    Row(verticalAlignment = Alignment.CenterVertically) {
+                                        Icon(Icons.Filled.SimCard, contentDescription = null, tint = DeliveryColors.TextSecondary)
+                                        Spacer(modifier = Modifier.width(2.dp))
+                                        Text(
+                                            "+243",
+                                            color = DeliveryColors.TextSecondary,
+                                            fontWeight = FontWeight.Bold,
+                                            fontSize = 15.sp
+                                        )
+                                    }
+                                },
+                                colors = TextFieldDefaults.colors(
+                                    focusedContainerColor = Color.White,
+                                    unfocusedContainerColor = DeliveryColors.InputBg,
+                                    disabledContainerColor = DeliveryColors.InputBg,
+                                    focusedIndicatorColor = DeliveryColors.Accent,
+                                    unfocusedIndicatorColor = Color.Transparent,
+                                    disabledIndicatorColor = Color.Transparent,
+                                    focusedTextColor = DeliveryColors.TextPrimary,
+                                    unfocusedTextColor = DeliveryColors.TextPrimary
+                                ),
+                                singleLine = true,
+                                keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number)
+                            )
+                        }
                     }
                 }
             }
