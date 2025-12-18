@@ -1,184 +1,228 @@
 package com.infosetgroup.delivery
 
 import android.Manifest
+import android.content.pm.PackageManager
 import android.graphics.Bitmap
 import android.os.Bundle
-import android.util.Base64
 import android.widget.Toast
 import androidx.activity.ComponentActivity
-import androidx.activity.compose.setContent
 import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.activity.result.contract.ActivityResultContracts.RequestPermission
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
-import androidx.compose.foundation.layout.Arrangement
-import androidx.compose.foundation.layout.Box
-import androidx.compose.foundation.layout.Column
-import androidx.compose.foundation.layout.Row
-import androidx.compose.foundation.layout.Spacer
-import androidx.compose.foundation.layout.fillMaxSize
-import androidx.compose.foundation.layout.fillMaxWidth
-import androidx.compose.foundation.layout.height
-import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.clickable
+import androidx.compose.foundation.layout.* // Filters all layout imports
+import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
-import androidx.compose.material3.Button
-import androidx.compose.material3.ButtonDefaults
-import androidx.compose.material3.Card
-import androidx.compose.material3.CardDefaults
-import androidx.compose.material3.CenterAlignedTopAppBar
-import androidx.compose.material3.ExperimentalMaterial3Api
-import androidx.compose.material3.OutlinedTextField
-import androidx.compose.material3.OutlinedTextFieldDefaults
-import androidx.compose.material3.Scaffold
-import androidx.compose.material3.Text
-import androidx.compose.material3.Surface
-import androidx.compose.material3.TopAppBarDefaults
-import androidx.compose.runtime.Composable
-import androidx.compose.runtime.mutableStateOf
-import androidx.compose.runtime.remember
+import androidx.compose.material.icons.automirrored.filled.KeyboardArrowRight
+import androidx.compose.ui.graphics.graphicsLayer
+import androidx.compose.material.icons.rounded.History
+import androidx.compose.material.icons.rounded.CloudOff
+import androidx.compose.foundation.text.KeyboardOptions
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.filled.ArrowBack
+import androidx.compose.material.icons.automirrored.filled.Assignment
+import androidx.compose.material.icons.automirrored.rounded.Assignment
+import androidx.compose.material.icons.filled.*
+import androidx.compose.material3.*
+import androidx.compose.material3.HorizontalDivider
+import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.asImageBitmap
+import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
-import androidx.compose.ui.text.style.TextAlign
+import androidx.compose.ui.text.input.KeyboardType
+import androidx.compose.ui.text.input.TextFieldValue
 import androidx.compose.ui.tooling.preview.Preview
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.core.content.ContextCompat
-import android.content.pm.PackageManager
-import androidx.compose.foundation.layout.heightIn
-import androidx.compose.ui.draw.clip
-import androidx.compose.ui.layout.ContentScale
+import androidx.lifecycle.viewmodel.compose.viewModel
+import com.infosetgroup.delivery.data.DeliveryEntity
+import com.infosetgroup.delivery.repository.DeliveryRepository
+import com.infosetgroup.delivery.ui.PendingScreen
+import com.infosetgroup.delivery.ui.SyncBottomBar
 import com.infosetgroup.delivery.ui.theme.DeliveryTheme
-import java.io.ByteArrayOutputStream
-import java.io.OutputStreamWriter
-import java.net.HttpURLConnection
-import java.net.URL
-import kotlin.concurrent.thread
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
+import java.io.File
+import java.io.FileOutputStream
+import java.text.SimpleDateFormat
+import java.util.Locale
 
-// Enhanced color palette for modern logistics branding
+// --- 1. DESIGN SYSTEM & COLORS ---
+
 object DeliveryColors {
-    val PrimaryDark = Color(0xFF0F1B3C) // Deep navy blue
-    val PrimaryCorral = Color(0xFFFF6B4A) // Coral accent
-    val SurfaceLight = Color(0xFFF8F9FB) // Soft white
-    val TextPrimary = Color(0xFF1A2847) // Dark text
-    val TextSecondary = Color(0xFF687483) // Muted text
-    val BorderLight = Color(0xFFE5E9F0) // Light border
-    val SuccessGreen = Color(0xFF10B981) // Success state
+    val PrimaryDark = Color(0xFF1E293B)     // Slate 800 (Header)
+    val PrimaryCorral = Color(0xFFFF6B4A) // The "Coral" orange-red color
+    val PrimaryLight = Color(0xFF334155)    // Slate 700
+    val Accent = Color(0xFFF97316)          // Orange 500 (Action Buttons)
+    val Background = Color(0xFFF1F5F9)      // Slate 100 (App Background)
+    val TextPrimary = Color(0xFF0F172A)
+    val TextSecondary = Color(0xFF64748B)
+    val InputBg = Color(0xFFF8FAFC)
+    val BorderSubtle = Color(0xFFE2E8F0)
 }
 
+// --- 2. DATA MODELS ---
+
+data class DeliveryItem(
+    val item: String,
+    val serialNumber: String,
+    val sim: String,
+    val merchant: String,
+    val shop: String,
+    val receiver: String,
+    val deliveryAgent: String,
+    val code: String
+)
+
+sealed class Screen(val title: String) {
+    object Form : Screen("Livraison")
+    object History : Screen("Historique")
+    object Offline : Screen("Hors-ligne")
+}
+
+sealed class MainTab {
+    object FormTab : MainTab()
+    object HistoryTab : MainTab()
+    object OfflineTab : MainTab()
+}
+
+// --- 3. REUSABLE UI COMPONENTS ---
+
+@Composable
+fun FormSectionTitle(title: String) {
+    Text(
+        text = title.uppercase(),
+        style = MaterialTheme.typography.labelMedium,
+        color = DeliveryColors.TextSecondary,
+        fontWeight = FontWeight.Bold,
+        modifier = Modifier.padding(start = 4.dp, bottom = 8.dp, top = 24.dp),
+        letterSpacing = 1.sp
+    )
+}
+
+@Composable
+fun ModernTextField(
+    value: String,
+    onValueChange: (String) -> Unit,
+    label: String,
+    icon: ImageVector,
+    modifier: Modifier = Modifier
+) {
+    Column(modifier = modifier) {
+        Text(
+            text = label,
+            fontSize = 12.sp,
+            fontWeight = FontWeight.Medium,
+            color = DeliveryColors.TextPrimary,
+            modifier = Modifier.padding(start = 4.dp, bottom = 4.dp)
+        )
+        TextField(
+            value = value,
+            onValueChange = onValueChange,
+            modifier = Modifier.fillMaxWidth(),
+            shape = RoundedCornerShape(12.dp),
+            leadingIcon = {
+                Icon(icon, contentDescription = null, tint = DeliveryColors.TextSecondary)
+            },
+            colors = TextFieldDefaults.colors(
+                focusedContainerColor = Color.White,
+                unfocusedContainerColor = DeliveryColors.InputBg,
+                disabledContainerColor = DeliveryColors.InputBg,
+                focusedIndicatorColor = DeliveryColors.Accent,
+                unfocusedIndicatorColor = Color.Transparent, // No underline
+                disabledIndicatorColor = Color.Transparent,
+                focusedTextColor = DeliveryColors.TextPrimary,
+                unfocusedTextColor = DeliveryColors.TextPrimary
+            ),
+            singleLine = true
+        )
+    }
+}
+
+// --- 4. MAIN ACTIVITY ---
+
 class MainActivity : ComponentActivity() {
-    @OptIn(ExperimentalMaterial3Api::class)
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         enableEdgeToEdge()
         setContent {
             DeliveryTheme {
-                Scaffold(
-                    modifier = Modifier.fillMaxSize(),
-                    topBar = {
-                        // Upgraded top bar with dark navy background and better styling
-                        CenterAlignedTopAppBar(
-                            title = {
-                                Column(
-                                    horizontalAlignment = Alignment.CenterHorizontally,
-                                    modifier = Modifier.fillMaxWidth()
-                                ) {
-                                    Text(
-                                        "Bon de Livraison",
-                                        fontWeight = FontWeight.Bold,
-                                        fontSize = 20.sp,
-                                        color = Color.White
-                                    )
-                                }
-                            },
-                            colors = TopAppBarDefaults.centerAlignedTopAppBarColors(
-                                containerColor = DeliveryColors.PrimaryDark
-                            ),
-                            modifier = Modifier.height(72.dp)
-                        )
-                    }
-                ) { innerPadding ->
-                    FormScreen(modifier = Modifier.padding(innerPadding))
-                }
+                MainScreen()
             }
         }
     }
 
-    // Updated to accept all fields and build a JSON payload in French keys
-    fun sendToApi(
-        objet: String,
-        serial: String,
-        sim: String,
-        marchand: String,
-        magasin: String,
-        responsable: String,
-        livreur: String,
-        imageBase64: String?
-    ) {
-        val endpoint = "https://example.com/api/upload"
-        thread {
+    // Fetch history Logic
+    fun fetchHistory(callback: (List<DeliveryItem>) -> Unit) {
+        val endpoint = "https://deliveries.devi7.in/api/rest/v1/deliveries/history"
+        Thread {
             try {
-                val url = URL(endpoint)
-                val conn = (url.openConnection() as HttpURLConnection).apply {
-                    requestMethod = "POST"
-                    setRequestProperty("Content-Type", "application/json")
-                    doOutput = true
+                val url = java.net.URL(endpoint)
+                val conn = (url.openConnection() as java.net.HttpURLConnection).apply {
+                    requestMethod = "GET"
                     connectTimeout = 15000
                     readTimeout = 15000
                 }
-
-                val safeImage = imageBase64 ?: ""
-                val json = "{" +
-                        "\"objet\":\"${escapeJson(objet)}\"," +
-                        "\"numero_serie\":\"${escapeJson(serial)}\"," +
-                        "\"sim\":\"${escapeJson(sim)}\"," +
-                        "\"marchand\":\"${escapeJson(marchand)}\"," +
-                        "\"magasin\":\"${escapeJson(magasin)}\"," +
-                        "\"responsable\":\"${escapeJson(responsable)}\"," +
-                        "\"livreur\":\"${escapeJson(livreur)}\"," +
-                        "\"image_base64\":\"${escapeJson(safeImage)}\"" +
-                        "}"
-
-                OutputStreamWriter(conn.outputStream).use { it.write(json) }
-
-                val code = conn.responseCode
-                runOnUiThread {
-                    val msg = if (code in 200..299) "Envoyé avec succès (code=$code)" else "Échec de l'envoi (code=$code)"
-                    Toast.makeText(this, msg, Toast.LENGTH_SHORT).show()
-                }
+                val input = conn.inputStream.bufferedReader().use { it.readText() }
                 conn.disconnect()
-            } catch (e: Exception) {
+
+                val arr = org.json.JSONArray(input)
+                val list = mutableListOf<DeliveryItem>()
+                for (i in 0 until arr.length()) {
+                    val obj = arr.getJSONObject(i)
+                    list.add(
+                        DeliveryItem(
+                            item = obj.optString("item"),
+                            serialNumber = obj.optString("serialNumber"),
+                            sim = obj.optString("sim"),
+                            merchant = obj.optString("merchant"),
+                            shop = obj.optString("shop"),
+                            receiver = obj.optString("receiver"),
+                            deliveryAgent = obj.optString("deliveryAgent"),
+                            code = obj.optString("code")
+                        )
+                    )
+                }
+                runOnUiThread { callback(list) }
+            } catch (_: Exception) {
                 runOnUiThread {
-                    Toast.makeText(this, "Erreur réseau: ${e.message}", Toast.LENGTH_LONG).show()
+                    runOnUiThread {
+                        val userFriendlyMessage = "Impossible de récupérer l'historique."
+                        Toast.makeText(this, "📴 $userFriendlyMessage", Toast.LENGTH_LONG).show()
+                        callback(emptyList())
+                    }
                 }
             }
-        }
-    }
-
-    private fun escapeJson(s: String): String {
-        return s
-            .replace("\\", "\\\\")
-            .replace("\"", "\\\"")
-            .replace("\n", "\\n")
-            .replace("\r", "\\r")
-            .replace("\t", "\\t")
+        }.start()
     }
 }
 
+// --- 5. MAIN SCREEN & NAVIGATION ---
+
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-fun FormScreen(modifier: Modifier = Modifier) {
+fun MainScreen() {
     val context = LocalContext.current
 
-    // form fields
+    // State Hoisting: Form data sits here so History can update it
     val objet = remember { mutableStateOf("") }
     val serial = remember { mutableStateOf("") }
     val sim = remember { mutableStateOf("") }
@@ -186,347 +230,738 @@ fun FormScreen(modifier: Modifier = Modifier) {
     val magasin = remember { mutableStateOf("") }
     val responsable = remember { mutableStateOf("") }
     val livreur = remember { mutableStateOf("") }
-
     val imageBitmap = remember { mutableStateOf<Bitmap?>(null) }
-    val imageBase64 = remember { mutableStateOf<String?>(null) }
+    val imagePath = remember { mutableStateOf<String?>(null) }
+    val selected = remember { mutableStateOf<Screen>(Screen.Form) }
+    val currentTab = remember { mutableStateOf<MainTab>(MainTab.FormTab) }
+    // --- NEW: State for selected history item ---
+    val selectedHistoryItem = remember { mutableStateOf<DeliveryItem?>(null) }
 
-    val cameraPermissionGranted = remember { mutableStateOf(
-        ContextCompat.checkSelfPermission(context, Manifest.permission.CAMERA) == PackageManager.PERMISSION_GRANTED
-    ) }
+    // Repository & Sync State
+    val repo = DeliveryRepository.getInstance(context)
+    val pendingCountFlow = repo.observePendingCount()
+    val pendingCount by pendingCountFlow.collectAsState(initial = 0)
+    val syncing = remember { mutableStateOf(false) }
 
-    val permissionLauncher = rememberLauncherForActivityResult(
-        contract = RequestPermission()
-    ) { granted: Boolean ->
-        cameraPermissionGranted.value = granted
-        if (!granted) {
-            Toast.makeText(context, "La permission d'appareil photo est requise", Toast.LENGTH_SHORT).show()
-        }
-    }
+    Scaffold(
+        bottomBar = {
+            Column {
+                // Custom Sync Bar from your existing code
+                SyncBottomBar(
+                    pendingCount = pendingCount,
+                    onOpenPending = {
+                        currentTab.value = MainTab.OfflineTab
+                        selected.value = Screen.Offline
+                    },
+                    onSync = {
+                        syncing.value = true
+                        CoroutineScope(Dispatchers.IO).launch {
+                            val res = repo.syncPending()
+                            syncing.value = false
+                            withContext(Dispatchers.Main) {
+                                when (res) {
+                                    is com.infosetgroup.delivery.repository.SyncResult.Success ->
+                                        Toast.makeText(context, "Synchronisé ${res.syncedCount}", Toast.LENGTH_SHORT).show()
+                                    is com.infosetgroup.delivery.repository.SyncResult.NothingToSync ->
+                                        Toast.makeText(context, "Rien à synchroniser", Toast.LENGTH_SHORT).show()
+                                    is com.infosetgroup.delivery.repository.SyncResult.Failure ->
+                                        Toast.makeText(context, "Échec: ${res.error}", Toast.LENGTH_LONG).show()
+                                }
+                            }
+                        }
+                    },
+                    syncing = syncing.value
+                )
 
-    // Launcher for taking picture
-    val launcher = rememberLauncherForActivityResult(
-        contract = ActivityResultContracts.TakePicturePreview()
-    ) { bitmap: Bitmap? ->
-        if (bitmap != null) {
-            imageBitmap.value = bitmap
-            // convert to base64
-            val baos = ByteArrayOutputStream()
-            bitmap.compress(Bitmap.CompressFormat.JPEG, 80, baos)
-            val bytes = baos.toByteArray()
-            imageBase64.value = Base64.encodeToString(bytes, Base64.NO_WRAP)
-            Toast.makeText(context, "Photo prise", Toast.LENGTH_SHORT).show()
-        } else {
-            Toast.makeText(context, "Aucune photo", Toast.LENGTH_SHORT).show()
-        }
-    }
-
-    // Updated surface background to match new color scheme
-    Surface(
-        modifier = modifier.fillMaxSize(),
-        color = DeliveryColors.SurfaceLight
-    ) {
-        Column(
-            modifier = Modifier
-                .padding(horizontal = 16.dp, vertical = 24.dp)
-                .verticalScroll(rememberScrollState()),
-        ) {
-            // Section: Détails de livraison
-            // Enhanced card styling with shadow and better spacing
-            Card(
-                shape = RoundedCornerShape(16.dp),
-                modifier = Modifier.fillMaxWidth(),
-                colors = CardDefaults.cardColors(containerColor = Color.White),
-                elevation = CardDefaults.cardElevation(
-                    defaultElevation = 2.dp
-                ),
-            ) {
-                Column(modifier = Modifier.padding(20.dp)) {
-                    Text(
-                        text = "📋 Détails de livraison",
-                        fontWeight = FontWeight.SemiBold,
-                        fontSize = 16.sp,
-                        color = DeliveryColors.TextPrimary
-                    )
-                    Spacer(modifier = Modifier.height(16.dp))
-
-                    // Enhanced form fields with improved styling
-                    StyledTextField(
-                        value = objet.value,
-                        onValueChange = { objet.value = it },
-                        label = "Objet",
-                        modifier = Modifier.fillMaxWidth()
+                // Navigation Bar
+                // --- PROFESSIONAL NAVIGATION BAR ---
+                NavigationBar(
+                    containerColor = Color.White.copy(alpha = 0.95f), // Modern glass effect
+                    tonalElevation = 0.dp, // Removes the muddy grey shadow
+                    modifier = Modifier
+                        .graphicsLayer {
+                            // High-definition diffused shadow
+                            shadowElevation = 24f
+                            shape = RoundedCornerShape(topStart = 24.dp, topEnd = 24.dp)
+                            clip = true
+                        }
+                        .border(
+                            width = 1.dp,
+                            color = DeliveryColors.BorderSubtle.copy(alpha = 0.5f),
+                            shape = RoundedCornerShape(topStart = 24.dp, topEnd = 24.dp)
+                        )
+                ) {
+                    // Define items in a list for clean iteration
+                    val navItems = listOf(
+                        Triple(MainTab.FormTab, Screen.Form, Icons.AutoMirrored.Rounded.Assignment),
+                        Triple(MainTab.HistoryTab, Screen.History, Icons.Rounded.History),
+                        Triple(MainTab.OfflineTab, Screen.Offline, Icons.Rounded.CloudOff)
                     )
 
-                    Spacer(modifier = Modifier.height(14.dp))
+                    navItems.forEach { (tab, screen, icon) ->
+                        val isSelected = currentTab.value == tab
 
-                    Row(horizontalArrangement = Arrangement.spacedBy(12.dp), modifier = Modifier.fillMaxWidth()) {
-                        StyledTextField(
-                            value = serial.value,
-                            onValueChange = { serial.value = it },
-                            label = "N° de série",
-                            modifier = Modifier.weight(1f)
-                        )
-                        StyledTextField(
-                            value = sim.value,
-                            onValueChange = { sim.value = it },
-                            label = "SIM",
-                            modifier = Modifier.weight(1f)
-                        )
-                    }
+                        NavigationBarItem(
+                            selected = isSelected,
+                            onClick = {
+                                currentTab.value = tab
+                                selected.value = screen
+                            },
+                            icon = {
+                                // Stack icon and a custom dot indicator
+                                Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                                    Icon(
+                                        imageVector = icon,
+                                        contentDescription = screen.title,
+                                        // Selected icon is slightly larger for visual "depth"
+                                        modifier = Modifier.size(if (isSelected) 26.dp else 24.dp)
+                                    )
 
-                    Spacer(modifier = Modifier.height(14.dp))
-
-                    Row(horizontalArrangement = Arrangement.spacedBy(12.dp), modifier = Modifier.fillMaxWidth()) {
-                        StyledTextField(
-                            value = marchand.value,
-                            onValueChange = { marchand.value = it },
-                            label = "Marchand",
-                            modifier = Modifier.weight(1f)
-                        )
-                        StyledTextField(
-                            value = magasin.value,
-                            onValueChange = { magasin.value = it },
-                            label = "Magasin",
-                            modifier = Modifier.weight(1f)
-                        )
-                    }
-
-                    Spacer(modifier = Modifier.height(14.dp))
-
-                    Row(horizontalArrangement = Arrangement.spacedBy(12.dp), modifier = Modifier.fillMaxWidth()) {
-                        StyledTextField(
-                            value = responsable.value,
-                            onValueChange = { responsable.value = it },
-                            label = "Responsable",
-                            modifier = Modifier.weight(1f)
-                        )
-                        StyledTextField(
-                            value = livreur.value,
-                            onValueChange = { livreur.value = it },
-                            label = "Livreur",
-                            modifier = Modifier.weight(1f)
+                                    // The "Active Dot" - a hallmark of professional UI
+                                    if (isSelected) {
+                                        Spacer(modifier = Modifier.height(4.dp))
+                                        Box(
+                                            modifier = Modifier
+                                                .size(4.dp)
+                                                .background(DeliveryColors.Accent, CircleShape)
+                                        )
+                                    }
+                                }
+                            },
+                            label = {
+                                Text(
+                                    text = screen.title,
+                                    style = MaterialTheme.typography.labelSmall,
+                                    fontWeight = if (isSelected) FontWeight.Bold else FontWeight.Medium,
+                                    color = if (isSelected) DeliveryColors.Accent else DeliveryColors.TextSecondary
+                                )
+                            },
+                            // Logic: only show the label of the active tab for a cleaner "Apple-style" look
+                            alwaysShowLabel = false,
+                            colors = NavigationBarItemDefaults.colors(
+                                selectedIconColor = DeliveryColors.Accent,
+                                selectedTextColor = DeliveryColors.Accent,
+                                unselectedIconColor = DeliveryColors.TextSecondary.copy(alpha = 0.6f),
+                                unselectedTextColor = DeliveryColors.TextSecondary.copy(alpha = 0.6f),
+                                // Hide the default heavy M3 background pill
+                                indicatorColor = Color.Transparent
+                            )
                         )
                     }
                 }
             }
+        }
+    ) { innerPadding ->
+        // --- NEW: Show detail if selectedHistoryItem is not null ---
+        if (selected.value is Screen.History && selectedHistoryItem.value != null) {
+            HistoryDetailScreen(
+                item = selectedHistoryItem.value!!,
+                onBack = { selectedHistoryItem.value = null },
+                modifier = Modifier.padding(innerPadding) // Pass innerPadding here
+            )
+        } else {
+            // Screen Content
+            when (selected.value) {
+                is Screen.Form -> {
+                    FormScreen(
+                        objet = objet,
+                        serial = serial,
+                        sim = sim,
+                        marchand = marchand,
+                        magasin = magasin,
+                        responsable = responsable,
+                        livreur = livreur,
+                        imageBitmap = imageBitmap,
+                        imagePath = imagePath,
+                        modifier = Modifier.padding(innerPadding)
+                    )
+                }
+                is Screen.History -> {
+                    HistoryScreen(
+                        onShowDetail = { selectedHistoryItem.value = it },
+                        modifier = Modifier.padding(innerPadding)
+                    )
+                }
+                is Screen.Offline -> {
+                    PendingScreen(
+                        onBack = {
+                            currentTab.value = MainTab.FormTab
+                            selected.value = Screen.Form
+                        },
+                        modifier = Modifier.padding(innerPadding)
+                    )
+                }
+            }
+        }
+    }
+}
 
-            Spacer(modifier = Modifier.height(20.dp))
+// --- 6. HISTORY SCREEN (Redesigned) ---
 
-            // Section: Signature / Preuve
-            Card(
-                shape = RoundedCornerShape(16.dp),
-                modifier = Modifier.fillMaxWidth(),
-                colors = CardDefaults.cardColors(containerColor = Color.White),
-                elevation = CardDefaults.cardElevation(
-                    defaultElevation = 2.dp
-                ),
+@Composable
+fun HistoryScreen(onShowDetail: (DeliveryItem) -> Unit, modifier: Modifier = Modifier) {
+    val context = LocalContext.current
+    val items = remember { mutableStateListOf<DeliveryItem>() }
+    val isLoading = remember { mutableStateOf(true) }
+    var query by remember { mutableStateOf(TextFieldValue("")) }
+
+    LaunchedEffect(Unit) {
+        val activity = context as? MainActivity
+        activity?.fetchHistory { list ->
+            items.clear()
+            items.addAll(list)
+            isLoading.value = false
+        } ?: run { isLoading.value = false }
+    }
+
+    Column(modifier = modifier.background(DeliveryColors.Background).fillMaxSize()) {
+        // Simple Header
+        Box(
+            modifier = Modifier
+                .fillMaxWidth()
+                .background(DeliveryColors.PrimaryDark)
+                .padding(24.dp)
+        ) {
+            Text(
+                text = "Historique Récent",
+                style = MaterialTheme.typography.titleLarge,
+                color = Color.White,
+                fontWeight = FontWeight.Bold
+            )
+        }
+
+        // Search Bar (Floating over header/content junction)
+        Box(modifier = Modifier.padding(horizontal = 16.dp).offset(y = (-24).dp)) {
+            OutlinedTextField(
+                value = query,
+                onValueChange = { query = it },
+                leadingIcon = { Icon(Icons.Filled.Search, contentDescription = "search") },
+                placeholder = { Text("Rechercher un n° série...") },
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .background(Color.White, RoundedCornerShape(12.dp)),
+                shape = RoundedCornerShape(12.dp),
+                colors = OutlinedTextFieldDefaults.colors(
+                    focusedBorderColor = DeliveryColors.Accent,
+                    unfocusedBorderColor = Color.Transparent
+                )
+            )
+        }
+
+        if (isLoading.value) {
+            Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+                CircularProgressIndicator(color = DeliveryColors.Accent)
+            }
+        } else {
+            LazyColumn(
+                contentPadding = PaddingValues(start = 16.dp, end = 16.dp, bottom = 20.dp)
             ) {
-                Column(modifier = Modifier.padding(20.dp)) {
-                    Text(
-                        text = "📸 Signature / Preuve",
-                        fontWeight = FontWeight.SemiBold,
-                        fontSize = 16.sp,
-                        color = DeliveryColors.TextPrimary
-                    )
-                    Spacer(modifier = Modifier.height(10.dp))
-                    Text(
-                        text = "Prenez une photo de la signature ou de la preuve de livraison.",
-                        color = DeliveryColors.TextSecondary,
-                        fontSize = 13.sp,
-                        lineHeight = 18.sp,
-                        modifier = Modifier.fillMaxWidth(),
-                        maxLines = 3
-                    )
-
-                    Spacer(modifier = Modifier.height(14.dp))
-
-                    Row(horizontalArrangement = Arrangement.spacedBy(12.dp), modifier = Modifier.fillMaxWidth()) {
-                        // Updated buttons with coral accent and improved styling
-                        StyledButton(
-                            onClick = {
-                                if (cameraPermissionGranted.value) {
-                                    launcher.launch(null)
-                                } else {
-                                    permissionLauncher.launch(Manifest.permission.CAMERA)
-                                }
-                            },
-                            text = "📷 Photo",
-                            modifier = Modifier.weight(1f),
-                            isPrimary = true
-                        )
-                        StyledButton(
-                            onClick = {
-                                imageBitmap.value = null
-                                imageBase64.value = null
-                            },
-                            text = "Effacer",
-                            modifier = Modifier.weight(1f),
-                            isPrimary = false
-                        )
-                    }
-
-                    Spacer(modifier = Modifier.height(16.dp))
-
-                    // Enhanced image preview styling
-                    if (imageBitmap.value != null) {
-                        Card(
-                            shape = RoundedCornerShape(12.dp),
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .border(1.dp, DeliveryColors.BorderLight, RoundedCornerShape(12.dp)),
-                            colors = CardDefaults.cardColors(containerColor = DeliveryColors.SurfaceLight)
-                        ) {
-                            Image(
-                                bitmap = imageBitmap.value!!.asImageBitmap(),
-                                contentDescription = "Signature capturée",
-                                contentScale = ContentScale.Crop,
+                items(items) { delivery ->
+                    // Ticket Style Item
+                    Card(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(vertical = 6.dp)
+                            .clickable { onShowDetail(delivery) },
+                        colors = CardDefaults.cardColors(containerColor = Color.White),
+                        elevation = CardDefaults.cardElevation(2.dp),
+                        shape = RoundedCornerShape(12.dp)
+                    ) {
+                        Row(modifier = Modifier.height(IntrinsicSize.Min)) {
+                            // Status Strip
+                            Box(
                                 modifier = Modifier
-                                    .fillMaxWidth()
-                                    .height(220.dp)
-                                    .clip(RoundedCornerShape(12.dp))
+                                    .fillMaxHeight()
+                                    .width(6.dp)
+                                    .background(if(delivery.code.isNotEmpty()) DeliveryColors.Accent else DeliveryColors.PrimaryLight)
                             )
-                        }
-                    } else {
-                        Card(
-                            shape = RoundedCornerShape(12.dp),
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .height(140.dp),
-                            colors = CardDefaults.cardColors(containerColor = DeliveryColors.SurfaceLight)
-                        ) {
-                            Box(contentAlignment = Alignment.Center) {
-                                Column(
-                                    horizontalAlignment = Alignment.CenterHorizontally,
-                                    verticalArrangement = Arrangement.Center,
-                                    modifier = Modifier.fillMaxSize()
-                                ) {
-                                    Text(text = "📭", fontSize = 32.sp)
-                                    Spacer(modifier = Modifier.height(8.dp))
+                            Column(modifier = Modifier.padding(16.dp).weight(1f)) {
+                                Row(verticalAlignment = Alignment.CenterVertically) {
                                     Text(
-                                        text = "Aucune photo",
-                                        color = DeliveryColors.TextSecondary,
-                                        fontSize = 13.sp
+                                        text = delivery.item,
+                                        style = MaterialTheme.typography.titleMedium,
+                                        fontWeight = FontWeight.Bold,
+                                        color = DeliveryColors.TextPrimary
+                                    )
+                                    Spacer(modifier = Modifier.weight(1f))
+                                    Box(
+                                        modifier = Modifier
+                                            .background(DeliveryColors.InputBg, RoundedCornerShape(4.dp))
+                                            .padding(horizontal = 6.dp, vertical = 2.dp)
+                                    ) {
+                                        Text(
+                                            text = delivery.shop,
+                                            style = MaterialTheme.typography.labelSmall,
+                                            color = DeliveryColors.TextSecondary
+                                        )
+                                    }
+                                }
+                                Spacer(modifier = Modifier.height(8.dp))
+                                Row(verticalAlignment = Alignment.CenterVertically) {
+                                    Icon(Icons.Filled.QrCode, null, Modifier.size(14.dp), DeliveryColors.Accent)
+                                    Spacer(modifier = Modifier.width(4.dp))
+                                    Text(
+                                        text = delivery.serialNumber,
+                                        style = MaterialTheme.typography.bodySmall,
+                                        color = DeliveryColors.TextSecondary
+                                    )
+                                    Spacer(modifier = Modifier.width(16.dp))
+                                    Icon(Icons.Filled.Person, null, Modifier.size(14.dp), DeliveryColors.Accent)
+                                    Spacer(modifier = Modifier.width(4.dp))
+                                    Text(
+                                        text = delivery.deliveryAgent,
+                                        style = MaterialTheme.typography.bodySmall,
+                                        color = DeliveryColors.TextSecondary
                                     )
                                 }
+                            }
+                            Box(modifier = Modifier.fillMaxHeight().padding(end = 12.dp), contentAlignment = Alignment.Center) {
+                                Icon(Icons.AutoMirrored.Filled.KeyboardArrowRight, null, tint = DeliveryColors.BorderSubtle)
                             }
                         }
                     }
                 }
             }
-
-            Spacer(modifier = Modifier.height(28.dp))
-
-            // Actions
-            Row(horizontalArrangement = Arrangement.spacedBy(12.dp), modifier = Modifier.fillMaxWidth()) {
-                StyledButton(
-                    onClick = {
-                        if (objet.value.isBlank()) {
-                            Toast.makeText(context, "Veuillez renseigner l'objet", Toast.LENGTH_SHORT).show()
-                            return@StyledButton
-                        }
-                        val activity = context as? MainActivity
-                        activity?.sendToApi(
-                            objet.value,
-                            serial.value,
-                            sim.value,
-                            marchand.value,
-                            magasin.value,
-                            responsable.value,
-                            livreur.value,
-                            imageBase64.value
-                        ) ?: Toast.makeText(context, "Impossible d'envoyer : activité introuvable", Toast.LENGTH_SHORT).show()
-                    },
-                    text = "✓ Envoyer",
-                    modifier = Modifier.weight(1f),
-                    isPrimary = true
-                )
-
-                StyledButton(
-                    onClick = {
-                        objet.value = ""
-                        serial.value = ""
-                        sim.value = ""
-                        marchand.value = ""
-                        magasin.value = ""
-                        responsable.value = ""
-                        livreur.value = ""
-                        imageBitmap.value = null
-                        imageBase64.value = null
-                    },
-                    text = "↻ Réinitialiser",
-                    modifier = Modifier.weight(1f),
-                    isPrimary = false
-                )
-            }
-
-            Spacer(modifier = Modifier.height(28.dp))
         }
     }
 }
 
-// New reusable styled text field component for consistency
+// --- LEGACY WRAPPER: keep a single canonical HistoryDetailScreen (with modifier) ---
 @Composable
-fun StyledTextField(
-    value: String,
-    onValueChange: (String) -> Unit,
-    label: String,
-    modifier: Modifier = Modifier
-) {
-    OutlinedTextField(
-        value = value,
-        onValueChange = onValueChange,
-        label = { Text(label, fontSize = 12.sp) },
-        modifier = modifier.height(56.dp),
-        singleLine = true,
-        colors = OutlinedTextFieldDefaults.colors(
-            focusedBorderColor = DeliveryColors.PrimaryCorral,
-            unfocusedBorderColor = DeliveryColors.BorderLight,
-            focusedLabelColor = DeliveryColors.PrimaryCorral,
-            unfocusedLabelColor = DeliveryColors.TextSecondary,
-            focusedTextColor = DeliveryColors.TextPrimary,
-            unfocusedTextColor = DeliveryColors.TextPrimary,
-            cursorColor = DeliveryColors.PrimaryCorral
-        ),
-        shape = RoundedCornerShape(8.dp),
-        textStyle = androidx.compose.ui.text.TextStyle(fontSize = 13.sp)
-    )
+fun HistoryDetailScreen(item: DeliveryItem, onBack: () -> Unit) {
+    // Forward to the canonical implementation that accepts a modifier
+    HistoryDetailScreen(item = item, onBack = onBack, modifier = Modifier)
 }
 
-// New reusable styled button component for consistency
+@OptIn(ExperimentalMaterial3Api::class)
 @Composable
-fun StyledButton(
-    onClick: () -> Unit,
-    text: String,
-    modifier: Modifier = Modifier,
-    isPrimary: Boolean = true
-) {
-    Button(
-        onClick = onClick,
-        // use heightIn to avoid forcing exact height which can conflict with weight
-        modifier = modifier.heightIn(min = 48.dp),
-        colors = ButtonDefaults.buttonColors(
-            containerColor = if (isPrimary) DeliveryColors.PrimaryCorral else DeliveryColors.BorderLight,
-            contentColor = if (isPrimary) Color.White else DeliveryColors.TextPrimary
-        ),
-        shape = RoundedCornerShape(10.dp),
-        contentPadding = androidx.compose.foundation.layout.PaddingValues(horizontal = 16.dp, vertical = 10.dp)
+fun HistoryDetailScreen(item: DeliveryItem, onBack: () -> Unit, modifier: Modifier = Modifier) {
+    Surface(
+        modifier = modifier.fillMaxSize(), // apply parent modifier (innerPadding) to root
+        color = DeliveryColors.Background
     ) {
-        Text(
-            text,
-            fontWeight = if (isPrimary) FontWeight.SemiBold else FontWeight.Medium,
-            fontSize = 14.sp,
-            maxLines = 1,
-            // ensure long text or emojis don't overflow vertically
-            modifier = Modifier.fillMaxWidth(),
-            textAlign = TextAlign.Center
+        // Build a list of detail rows to render
+        val details: List<Triple<ImageVector, String, String>> = listOf(
+            Triple(Icons.Filled.QrCode, "N° Série", item.serialNumber),
+            Triple(Icons.Filled.SimCard, "SIM", item.sim),
+            Triple(Icons.Filled.Store, "Marchand", item.merchant),
+            Triple(Icons.Filled.Store, "Magasin", item.shop),
+            Triple(Icons.Filled.Person, "Responsable", item.receiver),
+            Triple(Icons.Filled.LocalShipping, "Livreur", item.deliveryAgent),
+            Triple(Icons.Filled.VpnKey, "Code", item.code)
         )
+
+        // Root column: header (fixed) + scrollable list (takes rest)
+        Column(modifier = Modifier.fillMaxSize()) {
+            // Header
+            Box(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .statusBarsPadding()
+                    .background(
+                        brush = androidx.compose.ui.graphics.Brush.horizontalGradient(
+                            listOf(DeliveryColors.PrimaryDark, DeliveryColors.Accent)
+                        )
+                    )
+                    .height(150.dp)
+            ) {
+                Icon(
+                    imageVector = Icons.AutoMirrored.Filled.Assignment,
+                    contentDescription = null,
+                    tint = Color.White.copy(alpha = 0.12f),
+                    modifier = Modifier
+                        .size(140.dp)
+                        .align(Alignment.CenterEnd)
+                        .offset(x = 10.dp)
+                )
+
+                Column(
+                    modifier = Modifier
+                        .align(Alignment.BottomStart)
+                        .padding(start = 56.dp, end = 100.dp, bottom = 28.dp)
+                ) {
+                    Text(
+                        text = item.item,
+                        color = Color.White,
+                        fontWeight = FontWeight.Bold,
+                        fontSize = 26.sp,
+                        maxLines = 2,
+                        overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis
+                    )
+                    Spacer(modifier = Modifier.height(6.dp))
+                    Text(
+                        text = "Détail de la livraison",
+                        color = Color.White.copy(alpha = 0.9f),
+                        fontSize = 14.sp
+                    )
+                }
+
+                Box(
+                    modifier = Modifier
+                        .align(Alignment.TopStart)
+                        .statusBarsPadding()
+                        .padding(start = 12.dp, top = 18.dp)
+                        .size(48.dp)
+                        .background(Color.White.copy(alpha = 0.12f), CircleShape),
+                    contentAlignment = Alignment.Center
+                ) {
+                    IconButton(onClick = onBack, modifier = Modifier.size(40.dp)) {
+                        Icon(
+                            Icons.AutoMirrored.Filled.ArrowBack,
+                            contentDescription = "Retour",
+                            tint = Color.White,
+                            modifier = Modifier.size(20.dp)
+                        )
+                    }
+                }
+            }
+
+            // Scrollable details list
+            LazyColumn(
+                modifier = Modifier
+                    .weight(1f)
+                    .fillMaxWidth(),
+                contentPadding = PaddingValues(start = 20.dp, end = 20.dp, top = 18.dp, bottom = 40.dp)
+            ) {
+                items(details) { (icon, label, value) ->
+                    DetailRowModern(icon, label, value)
+                }
+
+                item {
+                    Spacer(modifier = Modifier.height(18.dp))
+                    Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.Center) {
+                        Text(
+                            text = "Données affichées localement",
+                            color = DeliveryColors.TextSecondary,
+                            fontSize = 12.sp
+                        )
+                    }
+                    Spacer(modifier = Modifier.height(28.dp))
+                }
+            }
+        }
     }
 }
 
+@Composable
+fun DetailRowModern(icon: ImageVector, label: String, value: String) {
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(vertical = 10.dp),
+        verticalAlignment = Alignment.CenterVertically
+    ) {
+        Box(
+            modifier = Modifier
+                .size(36.dp)
+                .background(DeliveryColors.InputBg, CircleShape),
+            contentAlignment = Alignment.Center
+        ) {
+            Icon(icon, contentDescription = null, tint = DeliveryColors.Accent, modifier = Modifier.size(20.dp))
+        }
+        Spacer(modifier = Modifier.width(16.dp))
+        Column(modifier = Modifier.weight(1f)) {
+            Text(
+                text = label,
+                color = DeliveryColors.TextSecondary,
+                fontSize = 13.sp,
+                fontWeight = FontWeight.Medium
+            )
+            Text(
+                text = value,
+                color = DeliveryColors.TextPrimary,
+                fontWeight = FontWeight.Bold,
+                fontSize = 16.sp,
+                maxLines = 2
+            )
+        }
+    }
+    HorizontalDivider(color = DeliveryColors.BorderSubtle, thickness = 1.dp)
+}
+
+// --- 7. FORM SCREEN (Redesigned) ---
+
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+fun FormScreen(
+    objet: MutableState<String>,
+    serial: MutableState<String>,
+    sim: MutableState<String>,
+    marchand: MutableState<String>,
+    magasin: MutableState<String>,
+    responsable: MutableState<String>,
+    livreur: MutableState<String>,
+    imageBitmap: MutableState<Bitmap?>,
+    imagePath: MutableState<String?>,
+    modifier: Modifier = Modifier
+) {
+    val context = LocalContext.current
+    val deliveryViewModel: com.infosetgroup.delivery.ui.DeliveryViewModel = viewModel()
+    val isSubmitting by deliveryViewModel.isSubmitting.collectAsState()
+    val lastSubmitResult by deliveryViewModel.lastSubmitResult.collectAsState()
+
+    // Camera Logic
+    val cameraPermissionGranted = remember {
+        mutableStateOf(ContextCompat.checkSelfPermission(context, Manifest.permission.CAMERA) == PackageManager.PERMISSION_GRANTED)
+    }
+    val permissionLauncher = rememberLauncherForActivityResult(RequestPermission()) { granted ->
+        cameraPermissionGranted.value = granted
+    }
+    val launcher = rememberLauncherForActivityResult(ActivityResultContracts.TakePicturePreview()) { bitmap ->
+        if (bitmap != null) {
+            imageBitmap.value = bitmap
+            try {
+                val dir = File(context.filesDir, "images")
+                if (!dir.exists()) dir.mkdirs()
+                val time = SimpleDateFormat("yyyyMMdd_HHmmss", Locale.US).format(System.currentTimeMillis())
+                val file = File(dir, "IMG_${time}.jpg")
+                FileOutputStream(file).use { fos -> bitmap.compress(Bitmap.CompressFormat.JPEG, 85, fos) }
+                imagePath.value = file.absolutePath
+            } catch (_: Exception) { Toast.makeText(context, "Erreur image", Toast.LENGTH_SHORT).show() }
+        }
+    }
+
+    LaunchedEffect(lastSubmitResult) {
+        lastSubmitResult?.let { res ->
+            when (res) {
+                is com.infosetgroup.delivery.repository.SubmitResult.Sent ->
+                    Toast.makeText(context, "Envoyé avec succès", Toast.LENGTH_SHORT).show()
+                is com.infosetgroup.delivery.repository.SubmitResult.Queued ->
+                    Toast.makeText(context, "Sauvegardé hors-ligne", Toast.LENGTH_SHORT).show()
+                is com.infosetgroup.delivery.repository.SubmitResult.Failure ->
+                    Toast.makeText(context, "Erreur: ${res.error}", Toast.LENGTH_LONG).show()
+            }
+        }
+    }
+
+    Column(
+        modifier = modifier
+            .fillMaxSize()
+            .background(DeliveryColors.Background)
+    ) {
+        // 1. Header
+        Surface(
+            color = DeliveryColors.PrimaryDark,
+            shape = RoundedCornerShape(bottomStart = 32.dp, bottomEnd = 32.dp),
+            shadowElevation = 8.dp,
+            modifier = Modifier.fillMaxWidth().height(110.dp)
+        ) {
+            Row(
+                modifier = Modifier.padding(24.dp),
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Column {
+                    Text(
+                        text = "Nouvelle Livraison",
+                        style = MaterialTheme.typography.headlineSmall,
+                        color = Color.White,
+                        fontWeight = FontWeight.Bold
+                    )
+                    Text(
+                        text = "Remplissez les détails ci-dessous",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = Color.White.copy(alpha = 0.7f)
+                    )
+                }
+                Spacer(modifier = Modifier.weight(1f))
+                Box(
+                    modifier = Modifier.size(48.dp).background(Color.White.copy(0.1f), CircleShape),
+                    contentAlignment = Alignment.Center
+                ) {
+                    Icon(Icons.Filled.Edit, null, tint = DeliveryColors.Accent)
+                }
+            }
+        }
+
+        // 2. Form Content
+        Column(
+            modifier = Modifier
+                .fillMaxSize()
+                .verticalScroll(rememberScrollState())
+                .padding(horizontal = 20.dp)
+        ) {
+
+            FormSectionTitle("Détails du Colis")
+            Card(colors = CardDefaults.cardColors(containerColor = Color.White), shape = RoundedCornerShape(16.dp)) {
+                Column(modifier = Modifier.padding(16.dp)) {
+                    ModernTextField(
+                        value = objet.value,
+                        onValueChange = { objet.value = it },
+                        label = "Objet / Produit",
+                        icon = Icons.Filled.Inventory2 // Ensure material-icons-extended dependency or change to Box
+                    )
+                    Spacer(modifier = Modifier.height(12.dp))
+                    Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+                        ModernTextField(
+                            value = serial.value,
+                            onValueChange = { serial.value = it },
+                            label = "N° Série",
+                            icon = Icons.Filled.QrCode,
+                            modifier = Modifier.weight(1f)
+                        )
+                        // SIM field with visible +243 prefix
+                        Column(modifier = Modifier.weight(1f)) {
+                            Text(
+                                text = "SIM / ICCID",
+                                fontSize = 12.sp,
+                                fontWeight = FontWeight.Medium,
+                                color = DeliveryColors.TextPrimary,
+                                modifier = Modifier.padding(start = 4.dp, bottom = 4.dp)
+                            )
+                            TextField(
+                                value = sim.value.removePrefix("+243"),
+                                onValueChange = { newValue ->
+                                    // Always enforce the +243 prefix
+                                    sim.value = "+243" + newValue.filter { it.isDigit() }
+                                },
+                                modifier = Modifier.fillMaxWidth(),
+                                shape = RoundedCornerShape(12.dp),
+                                leadingIcon = {
+                                    Row(verticalAlignment = Alignment.CenterVertically) {
+                                        Icon(Icons.Filled.SimCard, contentDescription = null, tint = DeliveryColors.TextSecondary)
+                                        Spacer(modifier = Modifier.width(2.dp))
+                                        Text(
+                                            "+243",
+                                            color = DeliveryColors.TextSecondary,
+                                            fontWeight = FontWeight.Bold,
+                                            fontSize = 15.sp
+                                        )
+                                    }
+                                },
+                                colors = TextFieldDefaults.colors(
+                                    focusedContainerColor = Color.White,
+                                    unfocusedContainerColor = DeliveryColors.InputBg,
+                                    disabledContainerColor = DeliveryColors.InputBg,
+                                    focusedIndicatorColor = DeliveryColors.Accent,
+                                    unfocusedIndicatorColor = Color.Transparent,
+                                    disabledIndicatorColor = Color.Transparent,
+                                    focusedTextColor = DeliveryColors.TextPrimary,
+                                    unfocusedTextColor = DeliveryColors.TextPrimary
+                                ),
+                                singleLine = true,
+                                keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number)
+                            )
+                        }
+                    }
+                }
+            }
+
+            FormSectionTitle("Point de Vente")
+            Card(colors = CardDefaults.cardColors(containerColor = Color.White), shape = RoundedCornerShape(16.dp)) {
+                Column(modifier = Modifier.padding(16.dp)) {
+                    ModernTextField(
+                        value = marchand.value,
+                        onValueChange = { marchand.value = it },
+                        label = "Marchand",
+                        icon = Icons.Filled.Store
+                    )
+                    Spacer(modifier = Modifier.height(12.dp))
+                    ModernTextField(
+                        value = magasin.value,
+                        onValueChange = { magasin.value = it },
+                        label = "Magasin / Zone",
+                        icon = Icons.Filled.Store
+                    )
+                }
+            }
+
+            FormSectionTitle("Intervenants")
+            Card(colors = CardDefaults.cardColors(containerColor = Color.White), shape = RoundedCornerShape(16.dp)) {
+                Column(modifier = Modifier.padding(16.dp)) {
+                    ModernTextField(
+                        value = responsable.value,
+                        onValueChange = { responsable.value = it },
+                        label = "Responsable Réception",
+                        icon = Icons.Filled.Person
+                    )
+                    Spacer(modifier = Modifier.height(12.dp))
+                    ModernTextField(
+                        value = livreur.value,
+                        onValueChange = { livreur.value = it },
+                        label = "Agent de Livraison",
+                        icon = Icons.Filled.LocalShipping
+                    )
+                }
+            }
+
+            FormSectionTitle("Preuve Photo")
+            Box(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .height(180.dp)
+                    .clip(RoundedCornerShape(16.dp))
+                    .background(Color.White)
+                    .border(2.dp, DeliveryColors.BorderSubtle, RoundedCornerShape(16.dp))
+                    .clickable {
+                        if (cameraPermissionGranted.value) launcher.launch(null)
+                        else permissionLauncher.launch(Manifest.permission.CAMERA)
+                    },
+                contentAlignment = Alignment.Center
+            ) {
+                if (imageBitmap.value != null) {
+                    Image(
+                        bitmap = imageBitmap.value!!.asImageBitmap(),
+                        contentDescription = "Preuve",
+                        contentScale = ContentScale.Crop,
+                        modifier = Modifier.fillMaxSize()
+                    )
+                    Box(Modifier.fillMaxSize().background(Color.Black.copy(0.4f)))
+                    Icon(Icons.Filled.Edit, "Change", tint = Color.White, modifier = Modifier.size(32.dp))
+                } else {
+                    Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                        Box(
+                            modifier = Modifier.size(60.dp).background(DeliveryColors.InputBg, CircleShape),
+                            contentAlignment = Alignment.Center
+                        ) {
+                            Icon(Icons.Filled.PhotoCamera, null, tint = DeliveryColors.Accent, modifier = Modifier.size(30.dp))
+                        }
+                        Spacer(modifier = Modifier.height(12.dp))
+                        Text("Appuyer pour photographier", color = DeliveryColors.TextSecondary)
+                    }
+                }
+            }
+
+            Spacer(modifier = Modifier.height(32.dp))
+
+            // Submit Button
+            Button(
+                onClick = {
+                    if (objet.value.isBlank() || serial.value.isBlank()) {
+                        Toast.makeText(context, "Données incomplètes (Objet/Série)", Toast.LENGTH_SHORT).show()
+                    } else {
+                        val entity = DeliveryEntity(
+                            item = objet.value, serialNumber = serial.value, sim = sim.value,
+                            merchant = marchand.value, shop = magasin.value,
+                            receiver = responsable.value, deliveryAgent = livreur.value,
+                            receiverProofPath = imagePath.value ?: "",
+
+                        )
+                        deliveryViewModel.submitDelivery(entity)
+                    }
+                },
+                modifier = Modifier.fillMaxWidth().height(56.dp),
+                shape = RoundedCornerShape(16.dp),
+                colors = ButtonDefaults.buttonColors(containerColor = DeliveryColors.Accent),
+                elevation = ButtonDefaults.buttonElevation(8.dp),
+                enabled = !isSubmitting
+            ) {
+                if (isSubmitting) {
+                    CircularProgressIndicator(color = Color.White, modifier = Modifier.size(24.dp))
+                } else {
+                    Text("VALIDER LA LIVRAISON", fontSize = 16.sp, fontWeight = FontWeight.Bold)
+                }
+            }
+            Spacer(modifier = Modifier.height(40.dp))
+        }
+    }
+}
+
+// 8. PREVIEW
 @Preview(showBackground = true)
 @Composable
-fun FormScreenPreview() {
+fun FormPreview() {
     DeliveryTheme {
-        FormScreen()
+        // Dummy preview, won't fully work without ViewModel context but shows layout
+        Text("Preview requires Mock VM")
     }
 }
