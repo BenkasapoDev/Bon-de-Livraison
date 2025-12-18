@@ -26,7 +26,6 @@ import androidx.compose.material.icons.automirrored.filled.KeyboardArrowRight
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.material.icons.rounded.History
 import androidx.compose.material.icons.rounded.CloudOff
-import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
@@ -357,7 +356,8 @@ fun MainScreen() {
         if (selected.value is Screen.History && selectedHistoryItem.value != null) {
             HistoryDetailScreen(
                 item = selectedHistoryItem.value!!,
-                onBack = { selectedHistoryItem.value = null }
+                onBack = { selectedHistoryItem.value = null },
+                modifier = Modifier.padding(innerPadding) // Pass innerPadding here
             )
         } else {
             // Screen Content
@@ -526,85 +526,118 @@ fun HistoryScreen(onShowDetail: (DeliveryItem) -> Unit, modifier: Modifier = Mod
     }
 }
 
-// --- NEW: HISTORY DETAIL SCREEN ---
-@OptIn(ExperimentalMaterial3Api::class)
+// --- LEGACY WRAPPER: keep a single canonical HistoryDetailScreen (with modifier) ---
 @Composable
 fun HistoryDetailScreen(item: DeliveryItem, onBack: () -> Unit) {
+    // Forward to the canonical implementation that accepts a modifier
+    HistoryDetailScreen(item = item, onBack = onBack, modifier = Modifier)
+}
+
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+fun HistoryDetailScreen(item: DeliveryItem, onBack: () -> Unit, modifier: Modifier = Modifier) {
     Surface(
-        modifier = Modifier.fillMaxSize(),
+        modifier = modifier.fillMaxSize(), // apply parent modifier (innerPadding) to root
         color = DeliveryColors.Background
     ) {
+        // Build a list of detail rows to render
+        val details: List<Triple<ImageVector, String, String>> = listOf(
+            Triple(Icons.Filled.QrCode, "N° Série", item.serialNumber),
+            Triple(Icons.Filled.SimCard, "SIM", item.sim),
+            Triple(Icons.Filled.Store, "Marchand", item.merchant),
+            Triple(Icons.Filled.Store, "Magasin", item.shop),
+            Triple(Icons.Filled.Person, "Responsable", item.receiver),
+            Triple(Icons.Filled.LocalShipping, "Livreur", item.deliveryAgent),
+            Triple(Icons.Filled.VpnKey, "Code", item.code)
+        )
+
+        // Root column: header (fixed) + scrollable list (takes rest)
         Column(modifier = Modifier.fillMaxSize()) {
-            // --- Modern Header ---
+            // Header
             Box(
                 modifier = Modifier
                     .fillMaxWidth()
+                    .statusBarsPadding()
                     .background(
                         brush = androidx.compose.ui.graphics.Brush.horizontalGradient(
                             listOf(DeliveryColors.PrimaryDark, DeliveryColors.Accent)
                         )
                     )
-                    .height(180.dp)
+                    .height(150.dp)
             ) {
-                // Large Icon
                 Icon(
                     imageVector = Icons.AutoMirrored.Filled.Assignment,
                     contentDescription = null,
-                    tint = Color.White.copy(alpha = 0.18f),
+                    tint = Color.White.copy(alpha = 0.12f),
                     modifier = Modifier
-                        .size(120.dp)
+                        .size(140.dp)
                         .align(Alignment.CenterEnd)
-                        .offset(x = 24.dp)
+                        .offset(x = 10.dp)
                 )
-                // Title
+
                 Column(
                     modifier = Modifier
-                        .align(Alignment.CenterStart)
-                        .padding(start = 28.dp, end = 100.dp)
+                        .align(Alignment.BottomStart)
+                        .padding(start = 56.dp, end = 100.dp, bottom = 28.dp)
                 ) {
                     Text(
                         text = item.item,
                         color = Color.White,
                         fontWeight = FontWeight.Bold,
                         fontSize = 26.sp,
-                        maxLines = 2
+                        maxLines = 2,
+                        overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis
                     )
-                    Spacer(modifier = Modifier.height(8.dp))
+                    Spacer(modifier = Modifier.height(6.dp))
                     Text(
                         text = "Détail de la livraison",
-                        color = Color.White.copy(alpha = 0.8f),
-                        fontSize = 15.sp
+                        color = Color.White.copy(alpha = 0.9f),
+                        fontSize = 14.sp
                     )
                 }
-                // Back Button
-                IconButton(
-                    onClick = onBack,
+
+                Box(
                     modifier = Modifier
                         .align(Alignment.TopStart)
-                        .padding(12.dp)
-                        .background(Color.White.copy(alpha = 0.18f), CircleShape)
+                        .statusBarsPadding()
+                        .padding(start = 12.dp, top = 18.dp)
+                        .size(48.dp)
+                        .background(Color.White.copy(alpha = 0.12f), CircleShape),
+                    contentAlignment = Alignment.Center
                 ) {
-                    Icon(
-                        Icons.AutoMirrored.Filled.ArrowBack,
-                        contentDescription = "Retour",
-                        tint = Color.White,
-                        modifier = Modifier.size(28.dp)
-                    )
+                    IconButton(onClick = onBack, modifier = Modifier.size(40.dp)) {
+                        Icon(
+                            Icons.AutoMirrored.Filled.ArrowBack,
+                            contentDescription = "Retour",
+                            tint = Color.White,
+                            modifier = Modifier.size(20.dp)
+                        )
+                    }
                 }
             }
-            // --- Details List ---
-            Column(
+
+            // Scrollable details list
+            LazyColumn(
                 modifier = Modifier
-                    .fillMaxWidth()
-                    .padding(horizontal = 24.dp, vertical = 18.dp)
+                    .weight(1f)
+                    .fillMaxWidth(),
+                contentPadding = PaddingValues(start = 20.dp, end = 20.dp, top = 18.dp, bottom = 40.dp)
             ) {
-                DetailRowModern(Icons.Filled.QrCode, "N° Série", item.serialNumber)
-                DetailRowModern(Icons.Filled.SimCard, "SIM", item.sim)
-                DetailRowModern(Icons.Filled.Store, "Marchand", item.merchant)
-                DetailRowModern(Icons.Filled.Store, "Magasin", item.shop)
-                DetailRowModern(Icons.Filled.Person, "Responsable", item.receiver)
-                DetailRowModern(Icons.Filled.LocalShipping, "Livreur", item.deliveryAgent)
-                DetailRowModern(Icons.Filled.VpnKey, "Code", item.code)
+                items(details) { (icon, label, value) ->
+                    DetailRowModern(icon, label, value)
+                }
+
+                item {
+                    Spacer(modifier = Modifier.height(18.dp))
+                    Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.Center) {
+                        Text(
+                            text = "Données affichées localement",
+                            color = DeliveryColors.TextSecondary,
+                            fontSize = 12.sp
+                        )
+                    }
+                    Spacer(modifier = Modifier.height(28.dp))
+                }
             }
         }
     }
@@ -684,7 +717,7 @@ fun FormScreen(
                 val file = File(dir, "IMG_${time}.jpg")
                 FileOutputStream(file).use { fos -> bitmap.compress(Bitmap.CompressFormat.JPEG, 85, fos) }
                 imagePath.value = file.absolutePath
-            } catch (e: Exception) { Toast.makeText(context, "Erreur image", Toast.LENGTH_SHORT).show() }
+            } catch (_: Exception) { Toast.makeText(context, "Erreur image", Toast.LENGTH_SHORT).show() }
         }
     }
 
