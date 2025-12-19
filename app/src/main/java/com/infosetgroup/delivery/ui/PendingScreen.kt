@@ -1,61 +1,89 @@
 @file:Suppress("ModifierParameter")
 package com.infosetgroup.delivery.ui
 
-import androidx.compose.animation.animateColorAsState
-import androidx.compose.animation.core.FastOutSlowInEasing
+// NEW imports to reuse the MainActivity design utils and colors
+
+import android.content.Context
+import android.net.ConnectivityManager
+import android.net.NetworkCapabilities
 import androidx.compose.animation.core.LinearEasing
-import androidx.compose.animation.core.tween
-import androidx.compose.animation.fadeIn
-import androidx.compose.animation.slideInVertically
-import androidx.compose.animation.*
 import androidx.compose.animation.core.animateFloat
 import androidx.compose.animation.core.infiniteRepeatable
 import androidx.compose.animation.core.rememberInfiniteTransition
+import androidx.compose.animation.core.tween
 import androidx.compose.foundation.background
-import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
-import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.IntrinsicSize
+import androidx.compose.foundation.layout.PaddingValues
+import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.fillMaxHeight
+import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
-import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.filled.ArrowBack
-import androidx.compose.material.icons.filled.Close
+import androidx.compose.material.icons.automirrored.filled.KeyboardArrowRight
+import androidx.compose.material.icons.filled.LocalShipping
+import androidx.compose.material.icons.filled.Person
+import androidx.compose.material.icons.filled.QrCode
+import androidx.compose.material.icons.filled.SimCard
+import androidx.compose.material.icons.filled.Store
 import androidx.compose.material.icons.filled.Sync
-import androidx.compose.material3.*
-import androidx.compose.runtime.*
+import androidx.compose.material.icons.filled.VpnKey
+import androidx.compose.material3.Button
+import androidx.compose.material3.ButtonDefaults
+import androidx.compose.material3.Card
+import androidx.compose.material3.CardDefaults
+import androidx.compose.material3.CircularProgressIndicator
+import androidx.compose.material3.ExperimentalMaterial3Api
+import androidx.compose.material3.HorizontalDivider
+import androidx.compose.material3.Icon
+import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.Scaffold
+import androidx.compose.material3.SnackbarDuration
+import androidx.compose.material3.SnackbarHost
+import androidx.compose.material3.SnackbarHostState
+import androidx.compose.material3.Surface
+import androidx.compose.material3.Text
+import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.draw.clip
-import androidx.compose.ui.draw.shadow
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.platform.LocalContext
-import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
-import androidx.compose.ui.unit.sp
 import androidx.lifecycle.viewmodel.compose.viewModel
-import com.infosetgroup.delivery.R
+import androidx.paging.LoadState
+import androidx.paging.compose.LazyPagingItems
+import androidx.paging.compose.collectAsLazyPagingItems
+import com.infosetgroup.delivery.CollapsedHeader
+import com.infosetgroup.delivery.DeliveryColors
 import com.infosetgroup.delivery.data.DeliveryEntity
-import com.infosetgroup.delivery.ui.theme.cardGradientEnd
-import com.infosetgroup.delivery.ui.theme.cardGradientStart
-import com.infosetgroup.delivery.ui.theme.primaryGradientEnd
-import com.infosetgroup.delivery.ui.theme.primaryGradientStart
-import com.infosetgroup.delivery.ui.theme.success
-import com.infosetgroup.delivery.ui.theme.failure
 import com.infosetgroup.delivery.ui.theme.md_grey_200
 import com.infosetgroup.delivery.ui.theme.md_grey_300
-import coil.compose.AsyncImage
-import coil.request.ImageRequest
-import java.io.File
-import java.text.SimpleDateFormat
-import java.util.*
+import com.infosetgroup.delivery.util.mapNetworkErrorToFrench
+import kotlinx.coroutines.launch
+import java.util.Locale
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Suppress("DEPRECATION")
@@ -70,81 +98,206 @@ fun PendingScreen(
 
     val isLoading by viewModel.isLoading.collectAsState()
     val syncing by viewModel.syncing.collectAsState()
-    val list by viewModel.list.collectAsState()
     val pendingCount by viewModel.pendingCount.collectAsState()
+    // use Material3 SnackbarHostState directly so snackbars display correctly
+    val snackbarHostState = remember { SnackbarHostState() }
+    val coroutineScope = rememberCoroutineScope()
+    val context = LocalContext.current
+
+    // helper: quick network connectivity check (resilient - won't require explicit permission at callsite)
+    fun isConnected(): Boolean {
+        return try {
+            val cm = context.getSystemService(Context.CONNECTIVITY_SERVICE) as? ConnectivityManager ?: return false
+            val nw = cm.activeNetwork ?: return false
+            val caps = cm.getNetworkCapabilities(nw) ?: return false
+            caps.hasCapability(NetworkCapabilities.NET_CAPABILITY_INTERNET)
+        } catch (_: Throwable) {
+            false
+        }
+    }
+
+    // collect one-shot sync events and show French messages (map common network errors to friendlier text)
+    LaunchedEffect(viewModel.syncEvents) {
+        viewModel.syncEvents.collect { res ->
+            when (res) {
+                is com.infosetgroup.delivery.repository.SyncResult.Success -> {
+                    val msg = "${res.syncedCount} livraisons synchronisées"
+                    snackbarHostState.showSnackbar(msg, duration = SnackbarDuration.Long)
+                }
+                is com.infosetgroup.delivery.repository.SyncResult.Failure -> {
+                    // Map common network error messages to friendly French text
+                    val friendly = mapNetworkErrorToFrench(res.error)
+                    snackbarHostState.showSnackbar(friendly, duration = SnackbarDuration.Long)
+                }
+                com.infosetgroup.delivery.repository.SyncResult.NothingToSync -> {
+                    snackbarHostState.showSnackbar("Aucune livraison à synchroniser", duration = SnackbarDuration.Long)
+                }
+            }
+        }
+    }
 
     var selectedDelivery by remember { mutableStateOf<DeliveryEntity?>(null) }
 
-    val sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
+    // Collect PagingData from ViewModel
+    val pagingItems = viewModel.pagingFlow.collectAsLazyPagingItems()
 
     Scaffold(
         modifier = modifier,
+        snackbarHost = { SnackbarHost(hostState = snackbarHostState) },
+        // Use the compact collapsed header (same as HistoryScreen) for visual harmony
         topBar = {
-            // Taller curved header with decorative blobs to better match the Dribbble inspiration — UI-only
-            Box(modifier = Modifier
-                .fillMaxWidth()
-                .height(190.dp)
-                .background(brush = Brush.horizontalGradient(listOf(primaryGradientStart, primaryGradientEnd)))
-            ) {
-                // decorative blobs (vector drawables)
-                Icon(painter = painterResource(id = R.drawable.blob_purple), contentDescription = null, tint = Color.Unspecified, modifier = Modifier.size(160.dp).offset(x = (-30).dp, y = (-20).dp).alpha(0.95f))
-                Icon(painter = painterResource(id = R.drawable.blob_teal), contentDescription = null, tint = Color.Unspecified, modifier = Modifier.size(120.dp).align(Alignment.TopEnd).offset(x = 40.dp, y = 20.dp).alpha(0.9f))
-
-                // curved bottom overlay using a Box with rounded corners to simulate arc
-                Box(modifier = Modifier
-                    .fillMaxWidth()
-                    .align(Alignment.BottomCenter)
-                    .height(56.dp)
-                    .background(color = Color.Transparent)
-                    .clip(RoundedCornerShape(topStart = 30.dp, topEnd = 30.dp))
-                )
-
-                // AppBar content aligned inside header
-                Row(modifier = Modifier
-                    .fillMaxWidth()
-                    .padding(horizontal = 20.dp, vertical = 28.dp), verticalAlignment = Alignment.Top) {
-                    IconButton(onClick = { onBack() }, modifier = Modifier.size(36.dp).background(color = Color.White.copy(alpha = 0.08f), shape = CircleShape)) {
-                        Icon(Icons.Filled.ArrowBack, contentDescription = "Back", tint = Color.White)
-                    }
-                    Spacer(modifier = Modifier.width(12.dp))
-                    Column(modifier = Modifier.weight(1f)) {
-                        Text("Pending Deliveries", style = MaterialTheme.typography.titleLarge.copy(fontWeight = FontWeight.ExtraBold, fontSize = 22.sp), color = Color.White)
-                        Spacer(modifier = Modifier.height(6.dp))
-                        Text("$pendingCount waiting to sync", style = MaterialTheme.typography.bodySmall, color = Color.White.copy(alpha = 0.9f))
-                    }
-
-                    // small circular avatar as an accent on right
-                    Box(modifier = Modifier.size(44.dp).clip(CircleShape).background(Color.White.copy(alpha = 0.12f)), contentAlignment = Alignment.Center) {
-                        Text("A", color = Color.White, fontWeight = FontWeight.Bold)
-                    }
-                }
-            }
+            CollapsedHeader(title = "Livraisons en attente", subtitle = "$pendingCount en attente", showBack = true, onBack = onBack)
         },
+        //
         content = { padding ->
-            Box(modifier = Modifier.fillMaxSize().padding(padding)) {
+            // Make background consistent with HistoryScreen
+            Box(modifier = Modifier
+                .fillMaxSize()
+                .background(DeliveryColors.Background)
+                .padding(padding)) {
+
                 when {
+                    // show top-level loading when first loading or when paging initial load
                     isLoading -> ShimmerLoading()
-                    list.isEmpty() -> EmptyStateWithCTA(onAdd = {})
-                    else -> AnimatedDeliveryList(list = list, modifier = Modifier.fillMaxSize().padding(horizontal = 16.dp, vertical = 12.dp), onItemClick = { selectedDelivery = it })
+                    pagingItems.itemCount == 0 && pagingItems.loadState.refresh is LoadState.NotLoading -> EmptyStateWithCTA(onAdd = {})
+                    else -> PagingTicketList(pagingItems = pagingItems, modifier = Modifier.fillMaxSize().padding(horizontal = 16.dp, vertical = 12.dp), onItemClick = { selectedDelivery = it })
                 }
 
                 // separate bottom sync bar pinned to bottom with stronger prominence
                 Column(modifier = Modifier.align(Alignment.BottomCenter).fillMaxWidth()) {
                     HorizontalDivider()
-                    PendingNavBar(pendingCount = pendingCount, syncing = syncing, onSync = { viewModel.syncDeliveries() })
+                    PendingNavBar(pendingCount = pendingCount, syncing = syncing, onSync = {
+                        // immediate feedback: check connectivity and show message
+                        if (!isConnected()) {
+                            coroutineScope.launch { snackbarHostState.showSnackbar("Pas de connexion", duration = SnackbarDuration.Long) }
+                        } else {
+                            coroutineScope.launch { snackbarHostState.showSnackbar("Envoi en cours...", duration = SnackbarDuration.Long) }
+                            viewModel.syncDeliveries()
+                        }
+                    })
                 }
-                // Delivery details sheet
+
+                // Delivery details sheet replaced by full-screen details to match HistoryDetailScreen
                 if (selectedDelivery != null) {
-                    ModalBottomSheet(
-                        onDismissRequest = { selectedDelivery = null },
-                        sheetState = sheetState
-                    ) {
-                        DeliveryDetailsSheet(delivery = selectedDelivery!!, onClose = { selectedDelivery = null })
-                    }
+                    // delegate to centralized DeliveryDetailScreen
+                    val d = selectedDelivery!!
+                    val details: List<Triple<ImageVector, String, String>> = listOf(
+                        Triple(Icons.Filled.QrCode, "N° Série", d.serialNumber),
+                        Triple(Icons.Filled.SimCard, "SIM", d.sim),
+                        Triple(Icons.Filled.Store, "Marchand", d.merchant),
+                        Triple(Icons.Filled.Store, "Magasin", d.shop),
+                        Triple(Icons.Filled.Person, "Responsable", d.receiver),
+                        Triple(Icons.Filled.LocalShipping, "Livreur", d.deliveryAgent),
+                        Triple(Icons.Filled.VpnKey, "Statut", mapStatusToFrench(d.status))
+                    )
+
+                    DeliveryDetailScreen(
+                        title = d.item,
+                        subtitle = "Détail de la livraison",
+                        details = details,
+                        imagePath = d.receiverProofPath,
+                        onBack = { selectedDelivery = null },
+                        modifier = Modifier
+                    )
                 }
             }
         }
     )
+}
+
+@Composable
+fun PagingTicketList(pagingItems: LazyPagingItems<DeliveryEntity>, modifier: Modifier = Modifier, onItemClick: (DeliveryEntity) -> Unit = {}) {
+    LazyColumn(modifier = modifier, contentPadding = PaddingValues(bottom = 100.dp)) {
+        // handle refresh/load states
+        when (pagingItems.loadState.refresh) {
+            is LoadState.Loading -> item { Box(modifier = Modifier.fillMaxWidth().height(200.dp), contentAlignment = Alignment.Center) { CircularProgressIndicator(color = DeliveryColors.Accent) } }
+            is LoadState.Error -> item { Box(modifier = Modifier.fillMaxWidth(), contentAlignment = Alignment.Center) { Text(text = "Erreur lors du chargement", color = MaterialTheme.colorScheme.error) } }
+            else -> {}
+        }
+
+        items(count = pagingItems.itemCount) { index ->
+            val delivery = pagingItems[index] ?: return@items
+            Card(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(vertical = 6.dp)
+                    .clickable { onItemClick(delivery) },
+                colors = CardDefaults.cardColors(containerColor = Color.White),
+                elevation = CardDefaults.cardElevation(2.dp),
+                shape = RoundedCornerShape(12.dp)
+            ) {
+                Row(modifier = Modifier.height(IntrinsicSize.Min)) {
+                    // Status strip
+                    Box(
+                        modifier = Modifier
+                            .fillMaxHeight()
+                            .width(6.dp)
+                            .background(
+                                when (delivery.status?.uppercase(Locale.getDefault())) {
+                                    "SENT" -> DeliveryColors.PrimaryCorral
+                                    "FAILED" -> MaterialTheme.colorScheme.error
+                                    else -> DeliveryColors.PrimaryLight
+                                }
+                            )
+                    )
+
+                    Column(modifier = Modifier.padding(16.dp).weight(1f)) {
+                        Row(verticalAlignment = Alignment.CenterVertically) {
+                            Text(
+                                text = delivery.item,
+                                style = MaterialTheme.typography.titleMedium,
+                                fontWeight = FontWeight.Bold,
+                                color = DeliveryColors.TextPrimary
+                            )
+                            Spacer(modifier = Modifier.weight(1f))
+                            Box(
+                                modifier = Modifier
+                                    .background(DeliveryColors.InputBg, RoundedCornerShape(4.dp))
+                                    .padding(horizontal = 6.dp, vertical = 2.dp)
+                            ) {
+                                Text(
+                                    text = delivery.shop,
+                                    style = MaterialTheme.typography.labelSmall,
+                                    color = DeliveryColors.TextSecondary
+                                )
+                            }
+                        }
+                        Spacer(modifier = Modifier.height(8.dp))
+                        Row(verticalAlignment = Alignment.CenterVertically) {
+                            Icon(Icons.Filled.QrCode, null, Modifier.size(14.dp), DeliveryColors.Accent)
+                            Spacer(modifier = Modifier.width(4.dp))
+                            Text(
+                                text = delivery.serialNumber,
+                                style = MaterialTheme.typography.bodySmall,
+                                color = DeliveryColors.TextSecondary
+                            )
+                            Spacer(modifier = Modifier.width(16.dp))
+                            Icon(Icons.Filled.Person, null, Modifier.size(14.dp), DeliveryColors.Accent)
+                            Spacer(modifier = Modifier.width(4.dp))
+                            Text(
+                                text = delivery.deliveryAgent,
+                                style = MaterialTheme.typography.bodySmall,
+                                color = DeliveryColors.TextSecondary
+                            )
+                        }
+                    }
+
+                    Box(modifier = Modifier.fillMaxHeight().padding(end = 12.dp), contentAlignment = Alignment.Center) {
+                        Icon(Icons.AutoMirrored.Filled.KeyboardArrowRight, null, tint = DeliveryColors.BorderSubtle)
+                    }
+                }
+            }
+        }
+
+        // footer: show loading or retry
+        item {
+            when (pagingItems.loadState.append) {
+                is LoadState.Loading -> Box(modifier = Modifier.fillMaxWidth().padding(12.dp), contentAlignment = Alignment.Center) { CircularProgressIndicator(color = DeliveryColors.Accent) }
+                is LoadState.Error -> Box(modifier = Modifier.fillMaxWidth().padding(12.dp), contentAlignment = Alignment.Center) { Button(onClick = { pagingItems.retry() }) { Text("Réessayer") } }
+                else -> Spacer(modifier = Modifier.height(8.dp))
+            }
+        }
+    }
 }
 
 @Composable
@@ -181,115 +334,96 @@ fun ShimmerLoading() {
     }
 }
 
+//
 @Composable
 fun EmptyStateWithCTA(onAdd: () -> Unit) {
     Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
         Column(horizontalAlignment = Alignment.CenterHorizontally) {
-            Text("No pending deliveries", style = MaterialTheme.typography.titleMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
+            Text("Aucune livraison en attente", style = MaterialTheme.typography.titleMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
             Spacer(modifier = Modifier.height(8.dp))
-            Text("Tap the form to add a delivery or sync when online.", style = MaterialTheme.typography.bodySmall)
+            Text("Utilisez le formulaire pour ajouter une livraison ou synchronisez lorsque vous êtes en ligne.", style = MaterialTheme.typography.bodySmall)
             Spacer(modifier = Modifier.height(20.dp))
-            Button(onClick = onAdd) { Text("Add delivery") }
+            Button(onClick = onAdd) { Text("Ajouter une livraison") }
         }
     }
 }
 
-@Composable
-fun AnimatedDeliveryList(list: List<DeliveryEntity>, modifier: Modifier = Modifier, onItemClick: (DeliveryEntity) -> Unit = {}) {
-    LazyColumn(modifier = modifier, verticalArrangement = Arrangement.spacedBy(12.dp), contentPadding = PaddingValues(bottom = 100.dp)) {
-        items(list, key = { it.id }) { delivery ->
-            AnimatedVisibility(
-                visible = true,
-                enter = fadeIn(animationSpec = tween(300)) + slideInVertically(initialOffsetY = { it / 4 }, animationSpec = tween(300, easing = FastOutSlowInEasing))
-            ) {
-                DeliveryItemCard(delivery = delivery, onClick = { onItemClick(delivery) })
-            }
-        }
-    }
-}
 
+// New ticket-style list to match HistoryScreen visual
+@Deprecated("Use PagingTicketList instead")
 @Composable
-fun DeliveryItemCard(delivery: DeliveryEntity, onClick: () -> Unit = {}) {
-    val local = LocalContext.current
-
-    Box(modifier = Modifier.fillMaxWidth(), contentAlignment = Alignment.TopStart) {
-        // Card with extra vertical padding so the overlapping image can sit comfortably
-        Card(
-            modifier = Modifier
-                .fillMaxWidth()
-                .padding(top = 20.dp)
-                .wrapContentHeight(),
-            elevation = CardDefaults.cardElevation(defaultElevation = 12.dp),
-            shape = RoundedCornerShape(20.dp)
-        ) {
-            Box(modifier = Modifier
-                .background(brush = Brush.verticalGradient(listOf(cardGradientStart, cardGradientEnd)))
-                .clickable { onClick() }
-            ) {
-                Row(modifier = Modifier
+fun TicketDeliveryList(list: List<DeliveryEntity>, modifier: Modifier = Modifier, onItemClick: (DeliveryEntity) -> Unit = {}) {
+    LazyColumn(modifier = modifier, contentPadding = PaddingValues(bottom = 100.dp)) {
+        items(list) { delivery ->
+            Card(
+                modifier = Modifier
                     .fillMaxWidth()
-                    .padding(start = 120.dp, top = 18.dp, bottom = 18.dp, end = 16.dp), verticalAlignment = Alignment.CenterVertically) {
+                    .padding(vertical = 6.dp)
+                    .clickable { onItemClick(delivery) },
+                colors = CardDefaults.cardColors(containerColor = Color.White),
+                elevation = CardDefaults.cardElevation(2.dp),
+                shape = RoundedCornerShape(12.dp)
+            ) {
+                Row(modifier = Modifier.height(IntrinsicSize.Min)) {
+                    // Status strip
+                    Box(
+                        modifier = Modifier
+                            .fillMaxHeight()
+                            .width(6.dp)
+                            .background(
+                                when (delivery.status?.uppercase(Locale.getDefault())) {
+                                    "SENT" -> DeliveryColors.PrimaryCorral
+                                    "FAILED" -> MaterialTheme.colorScheme.error
+                                    else -> DeliveryColors.PrimaryLight
+                                }
+                            )
+                    )
 
-                    Column(modifier = Modifier.weight(1f)) {
-                        Text(text = delivery.item, fontWeight = FontWeight.Bold, fontSize = 17.sp)
-                        Spacer(modifier = Modifier.height(8.dp))
-                        Text(text = delivery.shop, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
-                        Spacer(modifier = Modifier.height(10.dp))
+                    Column(modifier = Modifier.padding(16.dp).weight(1f)) {
                         Row(verticalAlignment = Alignment.CenterVertically) {
-                            Text(text = "Agent: ${delivery.deliveryAgent}", style = MaterialTheme.typography.bodySmall)
+                            Text(
+                                text = delivery.item,
+                                style = MaterialTheme.typography.titleMedium,
+                                fontWeight = FontWeight.Bold,
+                                color = DeliveryColors.TextPrimary
+                            )
                             Spacer(modifier = Modifier.weight(1f))
-                            Text(text = formatTime(delivery.createdAt), style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                            Box(
+                                modifier = Modifier
+                                    .background(DeliveryColors.InputBg, RoundedCornerShape(4.dp))
+                                    .padding(horizontal = 6.dp, vertical = 2.dp)
+                            ) {
+                                Text(
+                                    text = delivery.shop,
+                                    style = MaterialTheme.typography.labelSmall,
+                                    color = DeliveryColors.TextSecondary
+                                )
+                            }
+                        }
+                        Spacer(modifier = Modifier.height(8.dp))
+                        Row(verticalAlignment = Alignment.CenterVertically) {
+                            Icon(Icons.Filled.QrCode, null, Modifier.size(14.dp), DeliveryColors.Accent)
+                            Spacer(modifier = Modifier.width(4.dp))
+                            Text(
+                                text = delivery.serialNumber,
+                                style = MaterialTheme.typography.bodySmall,
+                                color = DeliveryColors.TextSecondary
+                            )
+                            Spacer(modifier = Modifier.width(16.dp))
+                            Icon(Icons.Filled.Person, null, Modifier.size(14.dp), DeliveryColors.Accent)
+                            Spacer(modifier = Modifier.width(4.dp))
+                            Text(
+                                text = delivery.deliveryAgent,
+                                style = MaterialTheme.typography.bodySmall,
+                                color = DeliveryColors.TextSecondary
+                            )
                         }
                     }
 
-                    // small action or chevron (kept visual only)
-                    Icon(Icons.Filled.Sync, contentDescription = null, tint = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.size(20.dp))
+                    Box(modifier = Modifier.fillMaxHeight().padding(end = 12.dp), contentAlignment = Alignment.Center) {
+                        Icon(Icons.AutoMirrored.Filled.KeyboardArrowRight, null, tint = DeliveryColors.BorderSubtle)
+                    }
                 }
-            }
-        }
-
-        // Overlapping image on the left — stands out from the card
-        val imageModifier = Modifier
-            .size(104.dp)
-            .offset(x = 16.dp)
-            .clip(RoundedCornerShape(14.dp))
-            .border(2.dp, Color.White.copy(alpha = 0.85f), RoundedCornerShape(14.dp))
-            .shadow(10.dp, RoundedCornerShape(14.dp))
-
-        val path = delivery.receiverProofPath
-        if (!path.isNullOrBlank()) {
-            val file = File(path)
-            if (file.exists()) {
-                AsyncImage(
-                    model = ImageRequest.Builder(local).data(file).crossfade(true).build(),
-                    contentDescription = "proof",
-                    modifier = imageModifier,
-                    contentScale = ContentScale.Crop
-                )
-            } else {
-                Box(modifier = imageModifier, contentAlignment = Alignment.Center) {
-                    Text("No image", style = MaterialTheme.typography.bodySmall)
-                }
-            }
-        } else {
-            Box(modifier = imageModifier, contentAlignment = Alignment.Center) {
-                Text("—", style = MaterialTheme.typography.bodyLarge)
-            }
-        }
-
-        // Status pill positioned at top-end of the card
-        val statusText = delivery.status ?: "PENDING"
-        val statusColor by animateColorAsState(targetValue = when (statusText.uppercase(Locale.getDefault())) {
-            "SENT" -> success
-            "FAILED" -> failure
-            else -> MaterialTheme.colorScheme.secondary
-        }, animationSpec = tween(durationMillis = 360))
-
-        Box(modifier = Modifier
-            .align(Alignment.TopEnd)
-            .offset(x = (-12).dp, y = 8.dp)) {
-            Surface(shape = RoundedCornerShape(20.dp), color = statusColor.copy(alpha = 0.95f), tonalElevation = 6.dp) {
-                Text(text = statusText.uppercase(Locale.getDefault()), modifier = Modifier.padding(horizontal = 10.dp, vertical = 6.dp), color = MaterialTheme.colorScheme.onPrimary, fontWeight = FontWeight.SemiBold, fontSize = 11.sp)
             }
         }
     }
@@ -304,60 +438,36 @@ fun PendingNavBar(pendingCount: Int, syncing: Boolean, onSync: () -> Unit) {
 
             // pending badge
             Box(modifier = Modifier
-                .background(color = MaterialTheme.colorScheme.surfaceVariant, shape = RoundedCornerShape(12.dp))
+                .background(color = DeliveryColors.InputBg, shape = RoundedCornerShape(12.dp))
                 .padding(horizontal = 10.dp, vertical = 8.dp)) {
-                Text(text = "$pendingCount pending", style = MaterialTheme.typography.bodySmall, fontWeight = FontWeight.Medium)
+                Text(text = "$pendingCount en attente", style = MaterialTheme.typography.bodySmall, fontWeight = FontWeight.Medium, color = DeliveryColors.TextPrimary)
             }
 
             Spacer(modifier = Modifier.weight(1f))
 
             // sync button
-            Button(onClick = { if (!syncing) onSync() }, enabled = !syncing, shape = RoundedCornerShape(12.dp)) {
+            Button(onClick = { if (!syncing) onSync() }, enabled = !syncing, shape = RoundedCornerShape(12.dp), colors = ButtonDefaults.buttonColors(containerColor = DeliveryColors.Accent)) {
                 if (syncing) {
-                    CircularProgressIndicator(modifier = Modifier.size(18.dp), strokeWidth = 2.dp, color = MaterialTheme.colorScheme.onPrimary)
+                    CircularProgressIndicator(modifier = Modifier.size(18.dp), strokeWidth = 2.dp, color = Color.White)
                     Spacer(modifier = Modifier.width(8.dp))
                 } else {
-                    Icon(Icons.Filled.Sync, contentDescription = "sync", tint = MaterialTheme.colorScheme.onPrimary)
+                    Icon(Icons.Filled.Sync, contentDescription = "synchroniser", tint = Color.White)
                     Spacer(modifier = Modifier.width(8.dp))
                 }
-                Text(text = "Envoyer", color = MaterialTheme.colorScheme.onPrimary, fontWeight = FontWeight.Bold)
+                Text(text = "Envoyer", color = Color.White, fontWeight = FontWeight.Bold)
             }
         }
     }
 }
 
-@Composable
-fun DeliveryDetailsSheet(delivery: DeliveryEntity, onClose: () -> Unit) {
-    Column(modifier = Modifier
-        .fillMaxWidth()
-        .padding(20.dp)) {
-        Row(verticalAlignment = Alignment.CenterVertically) {
-            Text(text = "Delivery details", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold)
-            Spacer(modifier = Modifier.weight(1f))
-            IconButton(onClick = onClose) { Icon(Icons.Filled.Close, contentDescription = "Close", tint = MaterialTheme.colorScheme.onSurface) }
-        }
-        Spacer(modifier = Modifier.height(12.dp))
-        Text(text = "Item: ${delivery.item}", style = MaterialTheme.typography.bodyLarge)
-        Spacer(modifier = Modifier.height(6.dp))
-        Text(text = "Serial: ${delivery.serialNumber}", style = MaterialTheme.typography.bodyMedium)
-        Spacer(modifier = Modifier.height(6.dp))
-        Text(text = "Shop: ${delivery.shop}", style = MaterialTheme.typography.bodyMedium)
-        Spacer(modifier = Modifier.height(6.dp))
-        Text(text = "Receiver: ${delivery.receiver}", style = MaterialTheme.typography.bodyMedium)
-        Spacer(modifier = Modifier.height(6.dp))
-        Text(text = "Agent: ${delivery.deliveryAgent}", style = MaterialTheme.typography.bodyMedium)
-        Spacer(modifier = Modifier.height(12.dp))
-        Row(horizontalArrangement = Arrangement.End, modifier = Modifier.fillMaxWidth()) {
-            Button(onClick = onClose) { Text("Close") }
-        }
-    }
-}
+// PendingDetailScreen removed. Use DeliveryDetailScreen (in DetailComponents.kt) to display full details for both History and Pending items.
 
-private fun formatTime(epoch: Long): String {
-    return try {
-        val sdf = SimpleDateFormat("dd MMM, HH:mm", Locale.getDefault())
-        sdf.format(Date(epoch))
-    } catch (_: Exception) {
-        ""
+private fun mapStatusToFrench(status: String?): String {
+    return when (status?.uppercase(Locale.getDefault())) {
+        "SENT" -> "ENVOYÉ"
+        "FAILED" -> "ÉCHOUÉ"
+        "PENDING" -> "EN ATTENTE"
+        null -> "EN ATTENTE"
+        else -> status.uppercase(Locale.getDefault())
     }
 }

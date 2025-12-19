@@ -49,5 +49,26 @@ object NetworkClient {
             NetworkResult.Failure(t)
         }
     }
-}
 
+    // New: fetch paged history (GET)
+    suspend fun getHistory(page: Int = 1, limit: Int = 20, keyword: String? = null): NetworkResult {
+        val urlBuilder = StringBuilder("$BASE/api/rest/v1/deliveries/history?page=$page&limit=$limit")
+        if (!keyword.isNullOrBlank()) {
+            // encode keyword minimally
+            val k = java.net.URLEncoder.encode(keyword, "UTF-8")
+            urlBuilder.append("&keyword=").append(k)
+        }
+        val url = urlBuilder.toString()
+        return try {
+            val req = Request.Builder()
+                .url(url)
+                .get()
+                .build()
+            val resp = client.newCall(req).execute()
+            val body = resp.body?.string()
+            NetworkResult.Success(resp.code, body)
+        } catch (t: Throwable) {
+            NetworkResult.Failure(t)
+        }
+    }
+}

@@ -3,16 +3,18 @@ package com.infosetgroup.delivery.repository
 import android.content.Context
 import android.util.Base64
 import com.infosetgroup.delivery.data.AppDatabase
+import com.infosetgroup.delivery.data.DeliveryDao
 import com.infosetgroup.delivery.data.DeliveryEntity
 import com.infosetgroup.delivery.network.NetworkClient
 import com.infosetgroup.delivery.network.NetworkResult
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
-import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.firstOrNull
+import kotlinx.coroutines.flow.Flow
 import org.json.JSONArray
 import org.json.JSONObject
 import java.io.File
+import androidx.paging.PagingSource
 
 
 
@@ -29,17 +31,27 @@ sealed class SyncResult {
 }
 
 class DeliveryRepository private constructor(private val context: Context) {
-    private val dao = AppDatabase.getInstance(context).deliveryDao()
+    private val dao: DeliveryDao = AppDatabase.getInstance(context).deliveryDao()
+
+    // expose DAO for callers that need direct DB access (paging, advanced queries)
+    fun getDao(): DeliveryDao = dao
+
+    // Convenience: expose the PagingSource directly so callers (ViewModels) can use Pager without touching DAO
+    fun getPendingPagingSource(): PagingSource<Int, DeliveryEntity> = dao.getAllPendingPaging()
 
     fun observePendingCount() = dao.getPendingCountFlow()
 
+    // return suspending list directly from DAO
     suspend fun getAllDeliveries(): List<DeliveryEntity> {
-        return getAllDeliveries()
+        return dao.getAllDeliveries()
     }
 
-    suspend fun syncDeliveries() {
-        val pending = dao.getAllPending().first()
-        if (pending.isEmpty()) return
+    // expose the DAO flow so callers can observe live updates
+    fun observeAllPending(): Flow<List<DeliveryEntity>> = dao.getAllPending()
+
+    // convenience wrapper to reuse the existing sync logic
+    suspend fun syncDeliveries(): SyncResult {
+        return syncPending()
     }
 
     private suspend fun fileToBase64(path: String?): String {
@@ -86,7 +98,7 @@ class DeliveryRepository private constructor(private val context: Context) {
                     return@withContext SubmitResult.Queued(id)
                 }
             }
-        } catch (t: Throwable) {
+        } catch (_: Throwable) {
             val id = dao.insertPending(entity)
             return@withContext SubmitResult.Queued(id)
         }
