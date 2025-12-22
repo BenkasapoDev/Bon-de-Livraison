@@ -15,6 +15,7 @@ data class HistoryEntity(
     val deliveryAgent: String,
     val code: String,
     val receiverProofPath: String?,
+    // ISO timestamp from server (e.g. "2025-12-22T11:22:01+00:00")
+    val createdAt: String?,
     val rowOrder: Long // ordering field to preserve server order
 )
-

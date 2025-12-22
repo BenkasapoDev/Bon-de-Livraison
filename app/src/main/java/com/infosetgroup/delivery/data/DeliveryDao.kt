@@ -21,6 +21,10 @@ interface DeliveryDao {
     @Query("SELECT * FROM pending_deliveries ORDER BY createdAt ASC")
     fun getAllPendingPaging(): PagingSource<Int, DeliveryEntity>
 
+    // Fetch single pending item by id (used for single-item sync from detail)
+    @Query("SELECT * FROM pending_deliveries WHERE id = :id LIMIT 1")
+    suspend fun getPendingById(id: Long): DeliveryEntity?
+
     // Non-flow for initial load
     @Query("SELECT * FROM pending_deliveries")
     suspend fun getAllDeliveries(): List<DeliveryEntity>

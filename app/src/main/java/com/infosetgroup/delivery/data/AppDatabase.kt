@@ -5,7 +5,7 @@ import androidx.room.Database
 import androidx.room.Room
 import androidx.room.RoomDatabase
 
-@Database(entities = [DeliveryEntity::class, HistoryEntity::class, RemoteKeys::class], version = 2, exportSchema = false)
+@Database(entities = [DeliveryEntity::class, HistoryEntity::class, RemoteKeys::class], version = 5, exportSchema = false)
 abstract class AppDatabase : RoomDatabase() {
     abstract fun deliveryDao(): DeliveryDao
     abstract fun remoteKeysDao(): RemoteKeysDao
@@ -14,14 +14,19 @@ abstract class AppDatabase : RoomDatabase() {
         @Volatile
         private var INSTANCE: AppDatabase? = null
 
+        @Suppress("DEPRECATION")
         fun getInstance(context: Context): AppDatabase {
             return INSTANCE ?: synchronized(this) {
                 val instance = Room.databaseBuilder(
                     context.applicationContext,
                     AppDatabase::class.java,
-                    "delivery_app.db"
-                ).addMigrations(DatabaseMigrations.MIGRATION_1_2)
-                 .build()
+                    "delivery_app_v5.db" // bumped filename and version to avoid old schema conflicts during development
+                )
+                    // During active development it's safer to allow destructive fallback so schema mismatches
+                    // don't crash the app; use proper migrations for production.
+                    .fallbackToDestructiveMigration()
+                    .fallbackToDestructiveMigrationOnDowngrade()
+                    .build()
                 INSTANCE = instance
                 instance
             }

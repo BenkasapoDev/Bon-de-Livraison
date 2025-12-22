@@ -55,8 +55,8 @@ class HistoryPagingSource(
                 }
                 is NetworkResult.Failure -> LoadResult.Error(res.throwable ?: Exception("Unknown network error"))
             }
-        } catch (t: Throwable) {
-            LoadResult.Error(t)
+        } catch (_: Throwable) {
+            LoadResult.Error(Exception("History load failed"))
         }
     }
 }

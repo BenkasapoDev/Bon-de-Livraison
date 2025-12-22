@@ -17,5 +17,8 @@ data class DeliveryEntity(
     val receiverProofPath: String?,
     val createdAt: Long = System.currentTimeMillis(),
     val retryCount: Int = 0,
+    // server code (optional) - keep nullable for backward compatibility
+    val code: String? = "",
+    // local status for retries/queue
     val status: String? = "PENDING"
 )

@@ -51,7 +51,13 @@ class HistoryRemoteMediator(
                             val obj = arr.getJSONObject(i)
                             // use `code` as unique id if server doesn't provide explicit id
                             val id = obj.optString("id", obj.optString("code", "${page}_$i"))
-                            val receiverPath = if (obj.has("receiverProofPath") && !obj.isNull("receiverProofPath")) obj.getString("receiverProofPath") else null
+                            // Some endpoints return base64 in `receiverProof` while cached field is `receiverProofPath`.
+                            val receiverPath = when {
+                                obj.has("receiverProofPath") && !obj.isNull("receiverProofPath") -> obj.getString("receiverProofPath")
+                                obj.has("receiverProof") && !obj.isNull("receiverProof") -> obj.getString("receiverProof")
+                                else -> null
+                            }
+                            val createdAt = if (obj.has("createdAt") && !obj.isNull("createdAt")) obj.getString("createdAt") else null
                             val rowOrder = ((page - 1) * limit + i).toLong()
                             items.add(
                                 HistoryEntity(
@@ -65,6 +71,7 @@ class HistoryRemoteMediator(
                                     deliveryAgent = obj.optString("deliveryAgent"),
                                     code = obj.optString("code"),
                                     receiverProofPath = receiverPath,
+                                    createdAt = createdAt,
                                     rowOrder = rowOrder
                                 )
                             )
@@ -90,8 +97,8 @@ class HistoryRemoteMediator(
                 }
                 is NetworkResult.Failure -> MediatorResult.Error(res.throwable ?: Exception("Unknown network error"))
             }
-        } catch (t: Throwable) {
-            MediatorResult.Error(t)
+        } catch (_: Throwable) {
+            MediatorResult.Error(Exception("History mediator failed"))
         }
     }
 }

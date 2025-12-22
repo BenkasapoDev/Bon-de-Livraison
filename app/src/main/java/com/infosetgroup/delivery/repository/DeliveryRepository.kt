@@ -54,6 +54,46 @@ class DeliveryRepository private constructor(private val context: Context) {
         return syncPending()
     }
 
+    // Sync a single pending delivery by id. Returns SubmitResult.Sent on success, Queued on failure
+    suspend fun syncSinglePending(id: Long): SubmitResult = withContext(Dispatchers.IO) {
+        val entity = dao.getPendingById(id) ?: return@withContext SubmitResult.Failure("Not found")
+        try {
+            val imageBase64 = fileToBase64(entity.receiverProofPath)
+            val json = JSONObject().apply {
+                put("item", entity.item)
+                put("serialNumber", entity.serialNumber)
+                put("sim", entity.sim)
+                put("merchant", entity.merchant)
+                put("shop", entity.shop)
+                put("receiver", entity.receiver)
+                put("deliveryAgent", entity.deliveryAgent)
+                put("receiverProof", imageBase64)
+            }.toString()
+
+            when (val res = NetworkClient.postDelivery(json)) {
+                is NetworkResult.Success -> {
+                    if (res.code in 200..299) {
+                        // on success remove local DB entry and delete file
+                        entity.receiverProofPath?.let { File(it).takeIf { f -> f.exists() }?.delete() }
+                        dao.deleteByIds(listOf(entity.id))
+                        return@withContext SubmitResult.Sent
+                    } else {
+                        dao.updateRetryCount(entity.id, entity.retryCount + 1)
+                        return@withContext SubmitResult.Queued(entity.id)
+                    }
+                }
+                is NetworkResult.Failure -> {
+                    dao.updateRetryCount(entity.id, entity.retryCount + 1)
+                    return@withContext SubmitResult.Queued(entity.id)
+                }
+            }
+        } catch (_: Throwable) {
+            dao.updateRetryCount(entity.id, entity.retryCount + 1)
+            return@withContext SubmitResult.Queued(entity.id)
+        }
+        return@withContext SubmitResult.Failure("Unknown")
+    }
+
     private suspend fun fileToBase64(path: String?): String {
         if (path.isNullOrBlank()) return ""
         return withContext(Dispatchers.IO) {
@@ -62,7 +102,7 @@ class DeliveryRepository private constructor(private val context: Context) {
                 if (!f.exists()) return@withContext ""
                 val bytes = f.readBytes()
                 Base64.encodeToString(bytes, Base64.NO_WRAP)
-            } catch (t: Throwable) {
+            } catch (_: Throwable) {
                 ""
             }
         }

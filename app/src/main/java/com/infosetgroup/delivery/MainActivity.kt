@@ -4,7 +4,6 @@ import android.Manifest
 import android.content.pm.PackageManager
 import android.graphics.Bitmap
 import android.os.Bundle
-import android.widget.Toast
 import com.infosetgroup.delivery.data.AppDatabaseHolder
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.rememberLauncherForActivityResult
@@ -25,8 +24,6 @@ import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
-import androidx.compose.material.icons.automirrored.filled.KeyboardArrowRight
-import androidx.compose.material.icons.automirrored.rounded.Assignment
 import androidx.compose.material.icons.filled.*
 import androidx.compose.material.icons.rounded.CloudOff
 import androidx.compose.material.icons.rounded.History
@@ -50,17 +47,20 @@ import androidx.core.content.ContextCompat
 import androidx.lifecycle.viewmodel.compose.viewModel
 import androidx.paging.LoadState
 import androidx.paging.compose.collectAsLazyPagingItems
-import coil.compose.AsyncImage
-import coil.request.ImageRequest
 import com.infosetgroup.delivery.data.DeliveryEntity
 import com.infosetgroup.delivery.ui.DeliveryDetailScreen
 import com.infosetgroup.delivery.ui.PendingScreen
 import com.infosetgroup.delivery.ui.theme.DeliveryTheme
 import kotlinx.coroutines.FlowPreview
+import kotlinx.coroutines.launch
 import java.io.File
 import java.io.FileOutputStream
 import java.text.SimpleDateFormat
 import java.util.Locale
+import com.infosetgroup.delivery.util.mapNetworkErrorToFrench
+import java.time.OffsetDateTime
+import java.time.format.DateTimeFormatter
+import java.time.format.DateTimeParseException
 
 // --- 1. DESIGN SYSTEM & COLORS ---
 
@@ -87,7 +87,9 @@ data class DeliveryItem(
     val receiver: String,
     val deliveryAgent: String,
     val code: String,
-    val receiverProofPath: String = ""
+    val receiverProofPath: String = "",
+    // optional ISO createdAt from server (e.g. 2025-12-22T11:22:01+00:00)
+    val createdAt: String? = null
 )
 
 sealed class Screen(val title: String) {
@@ -247,7 +249,11 @@ fun MainScreen() {
     val currentTab = remember { mutableStateOf<MainTab>(MainTab.FormTab) }
     val selectedHistoryItem = remember { mutableStateOf<DeliveryItem?>(null) }
 
+    // NEW: central SnackbarHostState for the whole screen
+    val snackbarHostState = remember { SnackbarHostState() }
+
     Scaffold(
+        snackbarHost = { SnackbarHost(hostState = snackbarHostState) },
         bottomBar = {
             Column {
                 NavigationBar(
@@ -266,7 +272,8 @@ fun MainScreen() {
                         )
                 ) {
                     val navItems = listOf(
-                        Triple(MainTab.FormTab, Screen.Form, Icons.AutoMirrored.Rounded.Assignment),
+                        // AutoMirrored.Rounded.Assignment isn't available with current icon set; use a stable icon.
+                        Triple(MainTab.FormTab, Screen.Form, Icons.Filled.Inventory2),
                         Triple(MainTab.HistoryTab, Screen.History, Icons.Rounded.History),
                         Triple(MainTab.OfflineTab, Screen.Offline, Icons.Rounded.CloudOff)
                     )
@@ -329,6 +336,7 @@ fun MainScreen() {
         } else {
             when (selected.value) {
                 is Screen.Form -> {
+                    // Pass snackbarHostState to FormScreen so it can show consistent French snackbars
                     FormScreen(
                         objet = objet,
                         serial = serial,
@@ -339,12 +347,14 @@ fun MainScreen() {
                         livreur = livreur,
                         imageBitmap = imageBitmap,
                         imagePath = imagePath,
+                        snackbarHostState = snackbarHostState,
                         modifier = Modifier.padding(innerPadding)
                     )
                 }
                 is Screen.History -> {
                     HistoryScreen(
                         onShowDetail = { selectedHistoryItem.value = it },
+                        snackbarHostState = snackbarHostState,
                         modifier = Modifier.padding(innerPadding)
                     )
                 }
@@ -354,6 +364,12 @@ fun MainScreen() {
                             currentTab.value = MainTab.FormTab
                             selected.value = Screen.Form
                         },
+                        onAdd = {
+                            // Navigate to the Form screen and select Form tab
+                            currentTab.value = MainTab.FormTab
+                            selected.value = Screen.Form
+                        },
+                        snackbarHostState = snackbarHostState,
                         modifier = Modifier.padding(innerPadding)
                     )
                 }
@@ -364,17 +380,32 @@ fun MainScreen() {
 
 // --- 6. HISTORY SCREEN ---
 
-@OptIn(FlowPreview::class)
+@OptIn(FlowPreview::class, ExperimentalMaterial3Api::class)
 @Composable
-fun HistoryScreen(onShowDetail: (DeliveryItem) -> Unit, modifier: Modifier = Modifier) {
+fun HistoryScreen(onShowDetail: (DeliveryItem) -> Unit, snackbarHostState: SnackbarHostState, modifier: Modifier = Modifier) {
     val vm: com.infosetgroup.delivery.ui.HistoryViewModel = viewModel()
     var query by remember { mutableStateOf("") }
     val lazyPagingItems = vm.historyFlow.collectAsLazyPagingItems()
+    val currentPageSize by vm.pageSize.collectAsState()
+
+    // Show paging errors as French snackbars
+    LaunchedEffect(lazyPagingItems.loadState) {
+        val refresh = lazyPagingItems.loadState.refresh
+        if (refresh is LoadState.Error) {
+            val err = refresh.error
+            snackbarHostState.showSnackbar(mapNetworkErrorToFrench(err.message ?: err.toString()))
+        }
+        val append = lazyPagingItems.loadState.append
+        if (append is LoadState.Error) {
+            val err = append.error
+            snackbarHostState.showSnackbar(mapNetworkErrorToFrench(err.message ?: err.toString()))
+        }
+    }
 
     Column(modifier = modifier.background(DeliveryColors.Background).fillMaxSize()) {
         CollapsedHeader(title = "Historique Récent")
 
-        Box(modifier = Modifier.padding(horizontal = 16.dp).offset(y = (-24).dp)) {
+        Column(modifier = Modifier.padding(horizontal = 16.dp).offset(y = (-24).dp)) {
             OutlinedTextField(
                 value = query,
                 onValueChange = { q ->
@@ -392,114 +423,129 @@ fun HistoryScreen(onShowDetail: (DeliveryItem) -> Unit, modifier: Modifier = Mod
                     unfocusedBorderColor = Color.Transparent
                 )
             )
+
+            Spacer(modifier = Modifier.height(12.dp))
+
+            // Show active query context to the user.
+            if (query.isNotBlank()) {
+                Text(
+                    text = "Résultats pour '$query'",
+                    style = MaterialTheme.typography.labelMedium,
+                    color = DeliveryColors.TextSecondary,
+                    modifier = Modifier.padding(start = 4.dp, bottom = 8.dp)
+                )
+            }
+
+            Row(
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(8.dp)
+            ) {
+                Text(
+                    text = "Afficher par:",
+                    style = MaterialTheme.typography.labelMedium,
+                    color = DeliveryColors.TextSecondary
+                )
+                listOf(10, 25, 50, 100).forEach { size ->
+                    FilterChip(
+                        selected = currentPageSize == size,
+                        onClick = { vm.setPageSize(size) },
+                        label = { Text(size.toString()) },
+                        colors = FilterChipDefaults.filterChipColors(
+                            selectedContainerColor = DeliveryColors.Accent,
+                            selectedLabelColor = Color.White
+                        )
+                    )
+                }
+            }
         }
 
         when (lazyPagingItems.loadState.refresh) {
             is LoadState.Loading -> Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
                 CircularProgressIndicator(color = DeliveryColors.Accent)
             }
-            is LoadState.Error -> Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
-                Text(text = "Erreur lors du chargement", color = MaterialTheme.colorScheme.error)
-            }
-            else -> {
-                LazyColumn(contentPadding = PaddingValues(start = 16.dp, end = 16.dp, bottom = 20.dp)) {
-                    items(count = lazyPagingItems.itemCount) { index ->
-                        val d = lazyPagingItems[index] ?: return@items
-                        Card(
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .padding(vertical = 6.dp)
-                                .clickable {
-                                    onShowDetail(
-                                        DeliveryItem(
-                                            item = d.item,
-                                            serialNumber = d.serialNumber,
-                                            sim = d.sim,
-                                            merchant = d.merchant,
-                                            shop = d.shop,
-                                            receiver = d.receiver,
-                                            deliveryAgent = d.deliveryAgent,
-                                            code = d.code,
-                                            receiverProofPath = d.receiverProofPath
-                                        )
-                                    )
-                                },
-                            colors = CardDefaults.cardColors(containerColor = Color.White),
-                            elevation = CardDefaults.cardElevation(2.dp),
-                            shape = RoundedCornerShape(12.dp)
-                        ) {
-                            Row(modifier = Modifier.height(IntrinsicSize.Min)) {
-                                Box(modifier = Modifier.fillMaxHeight().width(6.dp)
-                                    .background(if (d.code.isNotEmpty()) DeliveryColors.Accent else DeliveryColors.PrimaryLight))
 
-                                val thumbData = remember(d.receiverProofPath) {
-                                    val path = d.receiverProofPath
-                                    when {
-                                        path.startsWith("http", ignoreCase = true) -> path
-                                        path.startsWith("file:", ignoreCase = true) -> path
-                                        path.isNotBlank() -> "file://$path"
-                                        else -> null
-                                    }
-                                }
-
-                                if (thumbData != null) {
-                                    AsyncImage(
-                                        model = ImageRequest.Builder(LocalContext.current)
-                                            .data(thumbData)
-                                            .crossfade(true)
-                                            .build(),
-                                        contentDescription = "thumb",
-                                        modifier = Modifier
-                                            .padding(12.dp)
-                                            .size(56.dp)
-                                            .clip(RoundedCornerShape(8.dp)),
-                                        contentScale = ContentScale.Crop
-                                    )
-                                } else {
-                                    Box(
-                                        modifier = Modifier
-                                            .padding(12.dp)
-                                            .size(56.dp)
-                                            .clip(RoundedCornerShape(8.dp))
-                                            .background(DeliveryColors.InputBg),
-                                        contentAlignment = Alignment.Center
-                                    ) {
-                                        // PhotoCamera isn't available in material-icons-core; use CameraAlt as a safe default
-                                        Icon(Icons.Filled.CameraAlt, null, Modifier.size(22.dp), DeliveryColors.TextSecondary)
-                                    }
-                                }
-
-                                Column(modifier = Modifier.padding(16.dp).weight(1f)) {
-                                    Row(verticalAlignment = Alignment.CenterVertically) {
-                                        Text(text = d.item, style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold, color = DeliveryColors.TextPrimary)
-                                        Spacer(modifier = Modifier.weight(1f))
-                                        Box(modifier = Modifier.background(DeliveryColors.InputBg, RoundedCornerShape(4.dp)).padding(horizontal = 6.dp, vertical = 2.dp)) {
-                                            Text(text = d.shop, style = MaterialTheme.typography.labelSmall, color = DeliveryColors.TextSecondary)
-                                        }
-                                    }
-                                    Spacer(modifier = Modifier.height(8.dp))
-                                    Row(verticalAlignment = Alignment.CenterVertically) {
-                                        Icon(Icons.Filled.QrCode, null, Modifier.size(14.dp), DeliveryColors.Accent)
-                                        Spacer(modifier = Modifier.width(4.dp))
-                                        Text(text = d.serialNumber, style = MaterialTheme.typography.bodySmall, color = DeliveryColors.TextSecondary)
-                                        Spacer(modifier = Modifier.width(16.dp))
-                                        Icon(Icons.Filled.Person, null, Modifier.size(14.dp), DeliveryColors.Accent)
-                                        Spacer(modifier = Modifier.width(4.dp))
-                                        Text(text = d.deliveryAgent, style = MaterialTheme.typography.bodySmall, color = DeliveryColors.TextSecondary)
-                                    }
-                                }
-                                Box(modifier = Modifier.fillMaxHeight().padding(end = 12.dp), contentAlignment = Alignment.Center) {
-                                    Icon(Icons.AutoMirrored.Filled.KeyboardArrowRight, null, tint = DeliveryColors.BorderSubtle)
-                                }
-                            }
+            is LoadState.Error -> {
+                // Map the underlying error to a friendly French message and offer retry
+                val err = (lazyPagingItems.loadState.refresh as? LoadState.Error)?.error
+                val friendly = mapNetworkErrorToFrench(err?.message ?: err.toString())
+                Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+                    Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                        Text(text = friendly, color = MaterialTheme.colorScheme.error, style = MaterialTheme.typography.bodyLarge)
+                        Spacer(modifier = Modifier.height(12.dp))
+                        Button(onClick = { lazyPagingItems.retry() }) {
+                            Text("Réessayer")
                         }
                     }
+                }
+            }
 
-                    item {
-                        when (lazyPagingItems.loadState.append) {
-                            is LoadState.Loading -> Box(modifier = Modifier.fillMaxWidth().padding(12.dp), contentAlignment = Alignment.Center) { CircularProgressIndicator(color = DeliveryColors.Accent) }
-                            is LoadState.Error -> Box(modifier = Modifier.fillMaxWidth().padding(12.dp), contentAlignment = Alignment.Center) { Button(onClick = { lazyPagingItems.retry() }) { Text("Réessayer") } }
-                            else -> Spacer(modifier = Modifier.height(8.dp))
+            else -> {
+                if (lazyPagingItems.itemCount == 0) {
+                    Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+                        Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                            Icon(
+                                Icons.Filled.SearchOff,
+                                contentDescription = null,
+                                modifier = Modifier.size(64.dp),
+                                tint = DeliveryColors.TextSecondary.copy(alpha = 0.5f)
+                            )
+                            Spacer(modifier = Modifier.height(16.dp))
+                            Text(
+                                text = if (query.isNotBlank()) "Aucun résultat pour '$query'" else "Aucun résultat trouvé",
+                                style = MaterialTheme.typography.bodyLarge,
+                                color = DeliveryColors.TextSecondary
+                            )
+                        }
+                    }
+                } else {
+                    LazyColumn(contentPadding = PaddingValues(start = 16.dp, end = 16.dp, bottom = 20.dp)) {
+                        items(
+                            count = lazyPagingItems.itemCount,
+                            key = { index ->
+                                val it = lazyPagingItems[index]
+                                // Use backend `code` as the stable, unique key.
+                                // Avoid serialNumber: it can repeat and crash LazyColumn with duplicate keys.
+                                it?.code?.takeIf { c -> c.isNotBlank() } ?: index
+                            }
+                        ) { index ->
+                            val d = lazyPagingItems[index]
+                            if (d != null) {
+                                com.infosetgroup.delivery.ui.TicketCard(
+                                    title = d.item,
+                                    shop = d.shop,
+                                    serialNumber = d.serialNumber,
+                                    deliveryAgent = d.deliveryAgent,
+                                    code = d.code,
+                                    imagePath = d.receiverProofPath,
+                                    // NEW: pass createdAt to show in history
+                                    createdAt = d.createdAt,
+                                    onClick = { onShowDetail(d) }
+                                )
+                            }
+                        }
+
+                        item {
+                            when (lazyPagingItems.loadState.append) {
+                                is LoadState.Loading -> Box(
+                                    modifier = Modifier
+                                        .fillMaxWidth()
+                                        .padding(12.dp),
+                                    contentAlignment = Alignment.Center
+                                ) {
+                                    CircularProgressIndicator(color = DeliveryColors.Accent)
+                                }
+
+                                is LoadState.Error -> Box(
+                                    modifier = Modifier
+                                        .fillMaxWidth()
+                                        .padding(12.dp),
+                                    contentAlignment = Alignment.Center
+                                ) {
+                                    Button(onClick = { lazyPagingItems.retry() }) { Text("Réessayer") }
+                                }
+
+                                else -> Spacer(modifier = Modifier.height(8.dp))
+                            }
                         }
                     }
                 }
@@ -510,24 +556,157 @@ fun HistoryScreen(onShowDetail: (DeliveryItem) -> Unit, modifier: Modifier = Mod
 
 @Composable
 fun HistoryDetailScreen(item: DeliveryItem, onBack: () -> Unit, modifier: Modifier = Modifier) {
-    val details = listOf(
-        Triple(Icons.Filled.QrCode, "N° Série", item.serialNumber),
-        Triple(Icons.Filled.SimCard, "SIM", item.sim),
-        Triple(Icons.Filled.Store, "Marchand", item.merchant),
-        Triple(Icons.Filled.Store, "Magasin", item.shop),
-        Triple(Icons.Filled.Person, "Responsable", item.receiver),
-        Triple(Icons.Filled.LocalShipping, "Livreur", item.deliveryAgent),
-        Triple(Icons.Filled.VpnKey, "Code", item.code)
-    )
+    // Fetch full detail from server by code and display centralized DeliveryDetailScreen.
+    val code = item.code
+    var isLoading by remember { mutableStateOf(true) }
+    var errorMsg by remember { mutableStateOf<String?>(null) }
+    var fetched by remember { mutableStateOf<DeliveryItem?>(null) }
 
-    DeliveryDetailScreen(
-        title = item.item,
-        subtitle = "Détail de la livraison",
-        details = details,
-        imagePath = item.receiverProofPath,
-        onBack = onBack,
-        modifier = modifier
-    )
+    LaunchedEffect(code) {
+        isLoading = true
+        errorMsg = null
+        try {
+            val res = com.infosetgroup.delivery.network.NetworkClient.getHistoryDetail(code)
+            when (res) {
+                is com.infosetgroup.delivery.network.NetworkResult.Success -> {
+                    val body = res.body
+                    if (!body.isNullOrBlank()) {
+                        try {
+                            val jo = org.json.JSONObject(body)
+                            // log raw body for debug (prefix only)
+                            android.util.Log.d("HistoryDetail", "detail response body length=${body.length} prefix=${body.take(400)}")
+
+                            // parse fields defensively
+                            val itemName = jo.optString("item", item.item)
+                            val serial = jo.optString("serialNumber", item.serialNumber)
+                            val sim = jo.optString("sim", item.sim)
+                            val merchant = jo.optString("merchant", item.merchant)
+                            val shop = jo.optString("shop", item.shop)
+                            val receiver = jo.optString("receiver", item.receiver)
+                            val deliveryAgent = jo.optString("deliveryAgent", item.deliveryAgent)
+                            val codeResp = jo.optString("code", code)
+                            val receiverProof = jo.optString("receiverProof", item.receiverProofPath)
+
+                            android.util.Log.d("HistoryDetail", "raw receiverProof length=${receiverProof.length} prefix=${receiverProof.take(120)}")
+
+                            // Normalize receiverProof: remove quotes/whitespace and convert raw base64 to a data URL
+                            val normalizedReceiverProof = run {
+                                var candidate = receiverProof ?: ""
+                                candidate = candidate.trim()
+
+                                // If server returned an empty string but the list item had a value, use that as fallback
+                                if (candidate.isBlank() && item.receiverProofPath.isNotBlank()) {
+                                    android.util.Log.d("HistoryDetail", "receiverProof detail was blank; falling back to list item receiverProofPath (length=${item.receiverProofPath.length})")
+                                    candidate = item.receiverProofPath
+                                }
+
+                                // If blank -> return null (no image)
+                                if (candidate.isBlank()) {
+                                    android.util.Log.d("HistoryDetail", "receiverProof is blank after fallback checks for code=$codeResp")
+                                    return@run null
+                                }
+
+                                // strip surrounding quotes if present
+                                if ((candidate.startsWith("\"") && candidate.endsWith("\"")) || (candidate.startsWith("'") && candidate.endsWith("'"))) {
+                                    candidate = candidate.substring(1, candidate.length - 1)
+                                }
+
+                                // compact whitespace/newlines that may be embedded in base64 from the backend
+                                val compact = candidate.replace(Regex("\\s+"), "")
+                                val base64Regex = Regex("^[A-Za-z0-9+/=]+$")
+
+                                // allow common base64 payloads that may start with a leading '/'
+                                val looksLikeBase64 = compact.length > 40 && (base64Regex.matches(compact) || (compact.startsWith("/") && base64Regex.matches(compact.substring(1))))
+
+                                if (looksLikeBase64) {
+                                    val dataUrl = "data:image/jpeg;base64,$compact"
+                                    android.util.Log.d("HistoryDetail", "Detected base64 receiverProof for code=$codeResp, dataUrlPrefix=${dataUrl.take(80)}")
+                                    dataUrl
+                                } else {
+                                    // if already a data: URL or http/file path, keep as-is
+                                    if (candidate.startsWith("data:", ignoreCase = true) || candidate.startsWith("http", ignoreCase = true) || candidate.startsWith("file:", ignoreCase = true)) {
+                                        android.util.Log.d("HistoryDetail", "receiverProof seems to be a URL or data: for code=$codeResp, prefix=${candidate.take(80)}")
+                                        candidate
+                                    } else {
+                                        // unknown/unsupported format -> treat as absent
+                                        android.util.Log.d("HistoryDetail", "receiverProof present but not recognized as base64 or URL for code=$codeResp, prefix=${candidate.take(80)}")
+                                        null
+                                    }
+                                }
+                            }
+
+                            fetched = DeliveryItem(
+                                item = itemName,
+                                serialNumber = serial,
+                                sim = sim,
+                                merchant = merchant,
+                                shop = shop,
+                                receiver = receiver,
+                                deliveryAgent = deliveryAgent,
+                                code = codeResp,
+                                receiverProofPath = normalizedReceiverProof ?: ""
+                            )
+                        } catch (je: Exception) {
+                            // include exception message in error for better diagnostics
+                            errorMsg = "Erreur de lecture du détail: ${je.message ?: "format inattendu"}"
+                        }
+                    } else {
+                        errorMsg = "Aucune donnée reçue"
+                    }
+                }
+                is com.infosetgroup.delivery.network.NetworkResult.Failure -> {
+                    errorMsg = mapNetworkErrorToFrench(res.throwable?.message ?: "Erreur réseau")
+                }
+            }
+        } catch (t: Throwable) {
+            errorMsg = mapNetworkErrorToFrench(t.message ?: "Erreur inconnue")
+        } finally {
+            isLoading = false
+        }
+    }
+
+    when {
+        isLoading -> {
+            Box(modifier = modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+                CircularProgressIndicator(color = DeliveryColors.Accent)
+            }
+        }
+        errorMsg != null -> {
+            Column(modifier = modifier.fillMaxSize(), horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.Center) {
+                Text(text = errorMsg ?: "Erreur", color = MaterialTheme.colorScheme.error)
+                Spacer(modifier = Modifier.height(12.dp))
+                Button(onClick = { /* retry by re-triggering effect */ }, colors = ButtonDefaults.buttonColors(containerColor = DeliveryColors.Accent)) {
+                    Text("Réessayer")
+                }
+            }
+        }
+        fetched != null -> {
+            val it = fetched!!
+            val details = listOf(
+                Triple(Icons.Filled.QrCode, "N° Série", it.serialNumber),
+                Triple(Icons.Filled.SimCard, "SIM", it.sim),
+                Triple(Icons.Filled.Store, "Marchand", it.merchant),
+                Triple(Icons.Filled.Store, "Magasin", it.shop),
+                Triple(Icons.Filled.Person, "Responsable", it.receiver),
+                Triple(Icons.Filled.LocalShipping, "Livreur", it.deliveryAgent),
+                Triple(Icons.Filled.VpnKey, "Code", it.code)
+            )
+
+            DeliveryDetailScreen(
+                title = it.item,
+                subtitle = "Détail de la livraison",
+                details = details,
+                imagePath = it.receiverProofPath,
+                onBack = onBack,
+                modifier = modifier
+            )
+        }
+        else -> {
+            Box(modifier = modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+                Text("Aucun détail")
+            }
+        }
+    }
 }
 
 // --- 7. FORM SCREEN ---
@@ -543,12 +722,15 @@ fun FormScreen(
     livreur: MutableState<String>,
     imageBitmap: MutableState<Bitmap?>,
     imagePath: MutableState<String?>,
+    snackbarHostState: SnackbarHostState, // NEW param
     modifier: Modifier = Modifier
 ) {
     val context = LocalContext.current
     val deliveryViewModel: com.infosetgroup.delivery.ui.DeliveryViewModel = viewModel()
     val isSubmitting by deliveryViewModel.isSubmitting.collectAsState()
     val lastSubmitResult by deliveryViewModel.lastSubmitResult.collectAsState()
+
+    val scope = rememberCoroutineScope()
 
     val cameraPermissionGranted = remember {
         mutableStateOf(ContextCompat.checkSelfPermission(context, Manifest.permission.CAMERA) == PackageManager.PERMISSION_GRANTED)
@@ -566,19 +748,58 @@ fun FormScreen(
                 val file = File(dir, "IMG_${time}.jpg")
                 FileOutputStream(file).use { fos -> bitmap.compress(Bitmap.CompressFormat.JPEG, 85, fos) }
                 imagePath.value = file.absolutePath
-            } catch (_: Exception) { Toast.makeText(context, "Erreur image", Toast.LENGTH_SHORT).show() }
+            } catch (e: Exception) {
+                // show snackbar instead of Toast; use scope.launch to call suspend function
+                scope.launch {
+                    snackbarHostState.showSnackbar(message = "Erreur image: ${e.message ?: "Erreur inconnue"}")
+                }
+            }
         }
     }
+
+    // small helper to map common network / exception messages to friendly French
+    // (removed local implementation in favor of shared util mapNetworkErrorToFrench)
 
     LaunchedEffect(lastSubmitResult) {
         lastSubmitResult?.let { res ->
             when (res) {
-                is com.infosetgroup.delivery.repository.SubmitResult.Sent ->
-                    Toast.makeText(context, "Envoyé avec succès", Toast.LENGTH_SHORT).show()
-                is com.infosetgroup.delivery.repository.SubmitResult.Queued ->
-                    Toast.makeText(context, "Sauvegardé hors-ligne", Toast.LENGTH_SHORT).show()
-                is com.infosetgroup.delivery.repository.SubmitResult.Failure ->
-                    Toast.makeText(context, "Erreur: ${res.error}", Toast.LENGTH_LONG).show()
+                is com.infosetgroup.delivery.repository.SubmitResult.Sent -> {
+                    // show snackbar instead of Toast
+                    snackbarHostState.showSnackbar(message = "Envoyé avec succès")
+                    // Clear form fields after successful send
+                    objet.value = ""
+                    serial.value = ""
+                    sim.value = ""
+                    marchand.value = ""
+                    magasin.value = ""
+                    responsable.value = ""
+                    livreur.value = ""
+                    imageBitmap.value = null
+                    imagePath.value = null
+                    // acknowledge submission so it doesn't repeat
+                    deliveryViewModel.clearLastSubmitResult()
+                }
+                is com.infosetgroup.delivery.repository.SubmitResult.Queued -> {
+                    snackbarHostState.showSnackbar(message = "Sauvegardé hors-ligne")
+                    // Clear form fields after queued save as well
+                    objet.value = ""
+                    serial.value = ""
+                    sim.value = ""
+                    marchand.value = ""
+                    magasin.value = ""
+                    responsable.value = ""
+                    livreur.value = ""
+                    imageBitmap.value = null
+                    imagePath.value = null
+                    // acknowledge
+                    deliveryViewModel.clearLastSubmitResult()
+                }
+                is com.infosetgroup.delivery.repository.SubmitResult.Failure -> {
+                    val friendly = mapNetworkErrorToFrench(res.error)
+                    snackbarHostState.showSnackbar(message = "Erreur: $friendly")
+                    // acknowledge failure so it doesn't repeat; keep fields to let user retry
+                    deliveryViewModel.clearLastSubmitResult()
+                }
             }
         }
     }
@@ -681,7 +902,7 @@ fun FormScreen(
                 } else {
                     Column(horizontalAlignment = Alignment.CenterHorizontally) {
                         Box(modifier = Modifier.size(60.dp).background(DeliveryColors.InputBg, CircleShape), contentAlignment = Alignment.Center) {
-                            Icon(Icons.Filled.PhotoCamera, null, tint = DeliveryColors.Accent, modifier = Modifier.size(30.dp))
+                            Icon(Icons.Filled.CameraAlt, null, tint = DeliveryColors.Accent, modifier = Modifier.size(30.dp))
                         }
                         Spacer(modifier = Modifier.height(12.dp))
                         Text("Appuyer pour photographier", color = DeliveryColors.TextSecondary)
@@ -694,7 +915,10 @@ fun FormScreen(
             Button(
                 onClick = {
                     if (objet.value.isBlank() || serial.value.isBlank()) {
-                        Toast.makeText(context, "Données incomplètes (Objet/Série)", Toast.LENGTH_SHORT).show()
+                        // replaced Toast with snackbar via coroutine scope
+                        scope.launch {
+                            snackbarHostState.showSnackbar(message = "Données incomplètes (Objet/Série)")
+                        }
                     } else {
                         val entity = DeliveryEntity(
                             item = objet.value, serialNumber = serial.value, sim = sim.value,
@@ -727,5 +951,20 @@ fun FormScreen(
 fun FormPreview() {
     DeliveryTheme {
         Text("Preview requires Mock VM")
+    }
+}
+
+// helper to format ISO createdAt strings into friendly French date/time
+fun formatIsoCreatedAt(iso: String?): String {
+    if (iso.isNullOrBlank()) return ""
+    return try {
+        val odt = OffsetDateTime.parse(iso)
+        val fmt = DateTimeFormatter.ofPattern("dd MMM yyyy HH:mm", Locale.FRENCH)
+        odt.format(fmt)
+    } catch (e: DateTimeParseException) {
+        // fallback: return raw
+        iso
+    } catch (t: Throwable) {
+        iso
     }
 }

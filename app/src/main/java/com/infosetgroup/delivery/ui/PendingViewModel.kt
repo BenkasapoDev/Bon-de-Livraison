@@ -6,6 +6,7 @@ import androidx.lifecycle.viewModelScope
 import com.infosetgroup.delivery.data.DeliveryEntity
 import com.infosetgroup.delivery.repository.DeliveryRepository
 import com.infosetgroup.delivery.repository.SyncResult
+import com.infosetgroup.delivery.repository.SubmitResult
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.map
@@ -32,6 +33,10 @@ class PendingViewModel(application: Application) : AndroidViewModel(application)
 
     private val _syncing = MutableStateFlow(false)
     val syncing: StateFlow<Boolean> = _syncing
+
+    // single-item syncing state (detail view can observe this if needed)
+    private val _singleSyncing = MutableStateFlow<Long?>(null)
+    val singleSyncing: StateFlow<Long?> = _singleSyncing
 
     // emit one-time sync results for the UI to show messages
     private val _syncEvents = MutableSharedFlow<SyncResult>()
@@ -76,6 +81,26 @@ class PendingViewModel(application: Application) : AndroidViewModel(application)
                 }
             }
             _syncing.value = false
+        }
+    }
+
+    // Sync a single pending delivery by id (used from detail screen). Emits SyncResult via _syncEvents
+    fun syncSingle(id: Long) {
+        viewModelScope.launch {
+            _singleSyncing.value = id
+            when (val res = repository.syncSinglePending(id)) {
+                is SubmitResult.Sent -> {
+                    // treat as success of single item
+                    _syncEvents.emit(SyncResult.Success(1))
+                }
+                is SubmitResult.Queued -> {
+                    _syncEvents.emit(SyncResult.Failure("Envoi différé"))
+                }
+                is SubmitResult.Failure -> {
+                    _syncEvents.emit(SyncResult.Failure(res.error))
+                }
+            }
+            _singleSyncing.value = null
         }
     }
 }

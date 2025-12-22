@@ -1,4 +1,3 @@
-// ...existing code...
 package com.infosetgroup.delivery.ui
 
 import android.app.Application
@@ -37,5 +36,9 @@ class DeliveryViewModel(application: Application) : AndroidViewModel(application
             }
         }
     }
-}
 
+    // Allow UI to acknowledge/clear the last result after presenting feedback
+    fun clearLastSubmitResult() {
+        _lastSubmitResult.value = null
+    }
+}
