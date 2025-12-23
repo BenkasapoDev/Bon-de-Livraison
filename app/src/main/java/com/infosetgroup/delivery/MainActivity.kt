@@ -58,9 +58,10 @@ import java.io.FileOutputStream
 import java.text.SimpleDateFormat
 import java.util.Locale
 import com.infosetgroup.delivery.util.mapNetworkErrorToFrench
-import java.time.OffsetDateTime
-import java.time.format.DateTimeFormatter
-import java.time.format.DateTimeParseException
+import com.jakewharton.threetenabp.AndroidThreeTen
+import org.threeten.bp.OffsetDateTime
+import org.threeten.bp.format.DateTimeFormatter
+import org.threeten.bp.format.DateTimeParseException
 
 // --- 1. DESIGN SYSTEM & COLORS ---
 
@@ -220,8 +221,22 @@ fun CollapsedHeader(
 class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
-        // Initialize the Room database singleton early so ViewModels/RemoteMediator can use it
-        AppDatabaseHolder.init(applicationContext)
+
+        // Initialize important libraries synchronously to avoid race conditions where
+        // ViewModels or other components open the Room DB before our safe init runs.
+        try {
+            AndroidThreeTen.init(applicationContext)
+        } catch (e: Exception) {
+            android.util.Log.w("MainActivity", "AndroidThreeTen.init failed: ${e.message}")
+        }
+
+        try {
+            // AppDatabaseHolder will attempt a safe init and delete a stale DB file if needed.
+            AppDatabaseHolder.init(applicationContext)
+        } catch (e: Exception) {
+            android.util.Log.e("MainActivity", "AppDatabaseHolder.init failed", e)
+        }
+
         enableEdgeToEdge()
         setContent {
             DeliveryTheme {
@@ -503,13 +518,14 @@ fun HistoryScreen(onShowDetail: (DeliveryItem) -> Unit, snackbarHostState: Snack
                             count = lazyPagingItems.itemCount,
                             key = { index ->
                                 val it = lazyPagingItems[index]
-                                // Use backend `code` as the stable, unique key.
-                                // Avoid serialNumber: it can repeat and crash LazyColumn with duplicate keys.
                                 it?.code?.takeIf { c -> c.isNotBlank() } ?: index
                             }
                         ) { index ->
                             val d = lazyPagingItems[index]
                             if (d != null) {
+                                // Cache formatted date per item to avoid repeated parsing on each recomposition
+                                val formattedCreatedAt = remember(d.createdAt) { formatIsoCreatedAt(d.createdAt) }
+
                                 com.infosetgroup.delivery.ui.TicketCard(
                                     title = d.item,
                                     shop = d.shop,
@@ -517,8 +533,7 @@ fun HistoryScreen(onShowDetail: (DeliveryItem) -> Unit, snackbarHostState: Snack
                                     deliveryAgent = d.deliveryAgent,
                                     code = d.code,
                                     imagePath = d.receiverProofPath,
-                                    // NEW: pass createdAt to show in history
-                                    createdAt = d.createdAt,
+                                    createdAt = formattedCreatedAt,
                                     onClick = { onShowDetail(d) }
                                 )
                             }
@@ -902,7 +917,7 @@ fun FormScreen(
                 } else {
                     Column(horizontalAlignment = Alignment.CenterHorizontally) {
                         Box(modifier = Modifier.size(60.dp).background(DeliveryColors.InputBg, CircleShape), contentAlignment = Alignment.Center) {
-                            Icon(Icons.Filled.CameraAlt, null, tint = DeliveryColors.Accent, modifier = Modifier.size(30.dp))
+                            Icon(Icons.Filled.PhotoCamera, null, tint = DeliveryColors.Accent, modifier = Modifier.size(30.dp))
                         }
                         Spacer(modifier = Modifier.height(12.dp))
                         Text("Appuyer pour photographier", color = DeliveryColors.TextSecondary)
@@ -961,10 +976,10 @@ fun formatIsoCreatedAt(iso: String?): String {
         val odt = OffsetDateTime.parse(iso)
         val fmt = DateTimeFormatter.ofPattern("dd MMM yyyy HH:mm", Locale.FRENCH)
         odt.format(fmt)
-    } catch (e: DateTimeParseException) {
+    } catch (_: DateTimeParseException) {
         // fallback: return raw
         iso
-    } catch (t: Throwable) {
+    } catch (_: Throwable) {
         iso
     }
 }

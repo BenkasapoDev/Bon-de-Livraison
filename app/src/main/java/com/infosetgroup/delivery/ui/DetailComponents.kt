@@ -93,7 +93,7 @@ fun formatMillisToFrench(millis: Long?): String {
     return try {
         val sdf = java.text.SimpleDateFormat("dd MMM yyyy HH:mm", Locale.FRENCH)
         sdf.format(java.util.Date(millis))
-    } catch (t: Throwable) {
+    } catch (_: Throwable) {
         ""
     }
 }
@@ -162,11 +162,9 @@ fun DeliveryDetailScreen(
                 }
 
                 item {
-                    Spacer(modifier = Modifier.height(18.dp))
-                    Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.Center) {
-                        Text(text = "Données affichées localement", color = DeliveryColors.TextSecondary, fontSize = 12.sp)
-                    }
-                    Spacer(modifier = Modifier.height(18.dp))
+                    Spacer(modifier = Modifier.height(30.dp))
+
+
                 }
 
                 item {
@@ -372,8 +370,8 @@ fun TicketCard(
                             val tmp = File(cacheDir, "thumb_${System.currentTimeMillis()}.jpg")
                             FileOutputStream(tmp).use { it.write(bytes) }
                             tmp.absolutePath
-                        } catch (e: Exception) {
-                            Log.d("DetailComponents", "thumb decode/write failed: ${e.message}")
+                        } catch (_: Throwable) {
+                            Log.d("DetailComponents", "thumb decode/write failed: (exception)")
                             thumbData
                         }
                     } else thumbData

@@ -3,6 +3,7 @@ package com.infosetgroup.delivery.repository
 import android.content.Context
 import android.util.Base64
 import com.infosetgroup.delivery.data.AppDatabase
+import com.infosetgroup.delivery.data.AppDatabaseHolder
 import com.infosetgroup.delivery.data.DeliveryDao
 import com.infosetgroup.delivery.data.DeliveryEntity
 import com.infosetgroup.delivery.network.NetworkClient
@@ -30,24 +31,39 @@ sealed class SyncResult {
     object NothingToSync : SyncResult()
 }
 
-class DeliveryRepository private constructor(private val context: Context) {
-    private val dao: DeliveryDao = AppDatabase.getInstance(context).deliveryDao()
+class DeliveryRepository private constructor(context: Context) {
+    // Store application context only to avoid leaking Activity/Service contexts in a static singleton
+    private val appContext: Context = context.applicationContext
+
+    // Use AppDatabaseHolder to ensure initialization goes through the safe path which can
+    // remove a stale DB file on schema mismatch during development.
+    init {
+        try {
+            AppDatabaseHolder.init(appContext)
+        } catch (_: Throwable) {
+            // best-effort; AppDatabaseHolder already handles deletion/retry internally
+        }
+    }
+
+    // renamed private backing property to avoid JVM signature clash with public getDao()
+    private val dbDao: DeliveryDao
+        get() = AppDatabaseHolder.instance?.deliveryDao() ?: AppDatabase.getInstance(appContext).deliveryDao()
 
     // expose DAO for callers that need direct DB access (paging, advanced queries)
-    fun getDao(): DeliveryDao = dao
+    fun getDao(): DeliveryDao = dbDao
 
     // Convenience: expose the PagingSource directly so callers (ViewModels) can use Pager without touching DAO
-    fun getPendingPagingSource(): PagingSource<Int, DeliveryEntity> = dao.getAllPendingPaging()
+    fun getPendingPagingSource(): PagingSource<Int, DeliveryEntity> = dbDao.getAllPendingPaging()
 
-    fun observePendingCount() = dao.getPendingCountFlow()
+    fun observePendingCount() = dbDao.getPendingCountFlow()
 
     // return suspending list directly from DAO
     suspend fun getAllDeliveries(): List<DeliveryEntity> {
-        return dao.getAllDeliveries()
+        return dbDao.getAllDeliveries()
     }
 
     // expose the DAO flow so callers can observe live updates
-    fun observeAllPending(): Flow<List<DeliveryEntity>> = dao.getAllPending()
+    fun observeAllPending(): Flow<List<DeliveryEntity>> = dbDao.getAllPending()
 
     // convenience wrapper to reuse the existing sync logic
     suspend fun syncDeliveries(): SyncResult {
@@ -56,7 +72,7 @@ class DeliveryRepository private constructor(private val context: Context) {
 
     // Sync a single pending delivery by id. Returns SubmitResult.Sent on success, Queued on failure
     suspend fun syncSinglePending(id: Long): SubmitResult = withContext(Dispatchers.IO) {
-        val entity = dao.getPendingById(id) ?: return@withContext SubmitResult.Failure("Not found")
+        val entity = dbDao.getPendingById(id) ?: return@withContext SubmitResult.Failure("Not found")
         try {
             val imageBase64 = fileToBase64(entity.receiverProofPath)
             val json = JSONObject().apply {
@@ -75,23 +91,22 @@ class DeliveryRepository private constructor(private val context: Context) {
                     if (res.code in 200..299) {
                         // on success remove local DB entry and delete file
                         entity.receiverProofPath?.let { File(it).takeIf { f -> f.exists() }?.delete() }
-                        dao.deleteByIds(listOf(entity.id))
+                        dbDao.deleteByIds(listOf(entity.id))
                         return@withContext SubmitResult.Sent
                     } else {
-                        dao.updateRetryCount(entity.id, entity.retryCount + 1)
+                        dbDao.updateRetryCount(entity.id, entity.retryCount + 1)
                         return@withContext SubmitResult.Queued(entity.id)
                     }
                 }
                 is NetworkResult.Failure -> {
-                    dao.updateRetryCount(entity.id, entity.retryCount + 1)
+                    dbDao.updateRetryCount(entity.id, entity.retryCount + 1)
                     return@withContext SubmitResult.Queued(entity.id)
                 }
             }
         } catch (_: Throwable) {
-            dao.updateRetryCount(entity.id, entity.retryCount + 1)
+            dbDao.updateRetryCount(entity.id, entity.retryCount + 1)
             return@withContext SubmitResult.Queued(entity.id)
         }
-        return@withContext SubmitResult.Failure("Unknown")
     }
 
     private suspend fun fileToBase64(path: String?): String {
@@ -129,24 +144,24 @@ class DeliveryRepository private constructor(private val context: Context) {
                         entity.receiverProofPath?.let { File(it).takeIf { f -> f.exists() }?.delete() }
                         return@withContext SubmitResult.Sent
                     } else {
-                        val id = dao.insertPending(entity)
+                        val id = dbDao.insertPending(entity)
                         return@withContext SubmitResult.Queued(id)
                     }
                 }
                 is NetworkResult.Failure -> {
-                    val id = dao.insertPending(entity)
+                    val id = dbDao.insertPending(entity)
                     return@withContext SubmitResult.Queued(id)
                 }
             }
         } catch (_: Throwable) {
-            val id = dao.insertPending(entity)
+            val id = dbDao.insertPending(entity)
             return@withContext SubmitResult.Queued(id)
         }
     }
 
     suspend fun syncPending(): SyncResult = withContext(Dispatchers.IO) {
         // Refactor Flow collection and handle null safety
-        val pending = dao.getAllPending().firstOrNull() ?: emptyList()
+        val pending = dbDao.getAllPending().firstOrNull() ?: emptyList()
         if (pending.isEmpty()) return@withContext SyncResult.NothingToSync
 
         // build JSON array
@@ -179,19 +194,19 @@ class DeliveryRepository private constructor(private val context: Context) {
                             if (file.exists()) file.delete()
                         }
                     }
-                    dao.deleteByIds(ids)
+                    dbDao.deleteByIds(ids)
                     return@withContext SyncResult.Success(ids.size)
                 } else {
                     // non-2xx: increment retryCount
                     for (p in pending) {
-                        dao.updateRetryCount(p.id, p.retryCount + 1)
+                        dbDao.updateRetryCount(p.id, p.retryCount + 1)
                     }
                     return@withContext SyncResult.Failure("Server returned code ${res.code}")
                 }
             }
             is NetworkResult.Failure -> {
                 for (p in pending) {
-                    dao.updateRetryCount(p.id, p.retryCount + 1)
+                    dbDao.updateRetryCount(p.id, p.retryCount + 1)
                 }
                 return@withContext SyncResult.Failure(res.throwable?.message)
             }

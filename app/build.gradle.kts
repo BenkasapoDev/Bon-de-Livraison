@@ -79,6 +79,9 @@ dependencies {
 
     implementation("androidx.compose.material:material-icons-extended:1.5.0")
 
+    // Date/Time backport for API < 26
+    implementation("com.jakewharton.threetenabp:threetenabp:1.4.4")
+
     testImplementation(libs.junit)
     androidTestImplementation(libs.androidx.junit)
     androidTestImplementation(libs.androidx.espresso.core)
